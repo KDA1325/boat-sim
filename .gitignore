@@ -1,0 +1,59 @@
+# Unreal Engine generated folders
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Unreal Engine build and generated files
+*.pdb
+*.ipdb
+*.iobj
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.tmp
+*.log
+
+# Visual Studio / C++ IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+*.userprefs
+*.csproj
+*.sln
+*.sln.DotSettings.user
+
+# Rider
+*.sln.iml
+.idea/
+
+# Build outputs
+Build/
+BuildLinux/
+BuildWindows/
+BuildMac/
+Build/Receipts/
+*.exe
+*.app
+*.dylib
+*.so
+*.dll
+
+# Unreal autosaves and backups
+*.autosave
+*_BuiltData.uasset
+*_C-_*
+/Content/__ExternalActors__/
+/Content/__ExternalObjects__/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Coverage and profiling
+coverage/
+.profraw
