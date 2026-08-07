@@ -71,3 +71,6 @@ Build/*/**
 
 # Cache files for the editor to use
 **/DerivedDataCache/
+
+# Local task notes and generated personal documents
+/boat_sim/Docs/
