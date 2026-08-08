@@ -42,7 +42,7 @@ protected:
 	TObjectPtr<UBuoyancyComponent> BuoyancyComponent;
 
 	// 추진력, 저항력, 관성, 선회력 계산 컴포넌트
-	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat")
 	TObjectPtr<UBoatMovementComponent> MovementComponent;
 
 public:
