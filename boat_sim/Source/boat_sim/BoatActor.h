@@ -1,4 +1,4 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// 프로젝트 설정의 Description에서 저작권 문구를 설정할 수 있습니다.
 
 #pragma once
 
@@ -17,18 +17,20 @@ class UStaticMeshComponent;
  * 부유는 Water 플러그인을 사용하고 추진/감속/관성/선회는 직접 구현합니다.
  */
 class UBuoyancyComponent;
+class UBoatMovementComponent;
 
+// 선박 메시와 부력, 이동 컴포넌트를 하나로 묶는 액터
 UCLASS()
 class BOAT_SIM_API ABoatActor : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	// Sets default values for this actor's properties
+	// 액터의 기본 컴포넌트와 설정값 초기화
 	ABoatActor();
 
 protected:
-	// Called when the game starts or when spawned
+	// 게임이 시작되거나 액터가 생성될 때 호출
 	virtual void BeginPlay() override;
 
 	// 물리적으로 움직이는 보트 메시
@@ -39,7 +41,11 @@ protected:
 	UPROPERTY(VisibleAnywhere, Category = "Boat")
 	TObjectPtr<UBuoyancyComponent> BuoyancyComponent;
 
+	// 추진력, 저항력, 관성, 선회력 계산 컴포넌트
+	UPROPERTY(VisibleAnywhere, Category = "Boat")
+	TObjectPtr<UBoatMovementComponent> MovementComponent;
+
 public:
-	// Called every frame
+	// 매 프레임 호출
 	virtual void Tick(float DeltaTime) override;
 };
