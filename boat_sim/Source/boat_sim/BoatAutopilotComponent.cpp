@@ -8,6 +8,20 @@
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 
+namespace
+{
+	constexpr float CornerReferenceAngle{90.0f};
+	constexpr float HeadingSpeedReductionAngle{90.0f};
+	constexpr float RudderBrakeReleaseRatio{0.5f};
+	constexpr float RudderBrakeCenteringReleaseRatio{0.5f};
+
+	float SmoothRatio(const float Value)
+	{
+		const float ClampedValue = FMath::Clamp(Value, 0.0f, 1.0f);
+		return ClampedValue * ClampedValue * (3.0f - 2.0f * ClampedValue);
+	}
+}
+
 UBoatAutopilotComponent::UBoatAutopilotComponent()
 {
 	// 매 프레임 자율주행 입력을 갱신하도록 Tick 활성화
@@ -51,7 +65,7 @@ void UBoatAutopilotComponent::TickComponent(
 		return;
 	}
 
-	FollowRoute();
+	FollowRoute(DeltaTime);
 }
 
 void UBoatAutopilotComponent::InitializeRoute()
@@ -117,6 +131,11 @@ void UBoatAutopilotComponent::InitializeRoute()
 	RouteStartLocation = StartLocation;
 	CurrentWaypointIndex = 0;
 	ArrivalState = EBoatArrivalState::RouteFollowing;
+	RudderBrakeSide = EBoatRudderBrakeSide::Port;
+	CurrentThrottleInput = 0.0f;
+	CurrentRudderInput = 0.0f;
+	bRudderBrakeActive = false;
+	bRudderBrakeCentering = false;
 	bRouteReady = true;
 	bArrived = false;
 
@@ -131,7 +150,7 @@ AActor* UBoatAutopilotComponent::FindActorWithTag(const FName ActorTag) const
 	return FoundActors.IsEmpty() ? nullptr : FoundActors[0];
 }
 
-void UBoatAutopilotComponent::FollowRoute()
+void UBoatAutopilotComponent::FollowRoute(const float DeltaTime)
 {
 	const AActor* Owner = GetOwner();
 	if (Owner == nullptr || !Waypoints.IsValidIndex(CurrentWaypointIndex))
@@ -158,38 +177,54 @@ void UBoatAutopilotComponent::FollowRoute()
 	const float ForwardSpeed = FVector::DotProduct(Velocity, Forward);
 	const float PlanarSpeed = Velocity.Size2D();
 
-	// 정확한 웨이포인트 대신 경로 위 앞쪽 지점을 바라보며 부드럽게 선회
-	const bool bFinalArrivalActive = bFinalWaypoint
-		&& (ArrivalState != EBoatArrivalState::RouteFollowing
-			|| DistanceToWaypoint <= GoalSlowdownDistance);
-	const FVector SteeringTarget = bFinalArrivalActive
-		? CalculateFinalHeadingTarget()
-		: CalculateLookAheadTarget(CurrentLocation);
-	const float HeadingError = CalculateHeadingError(SteeringTarget);
-	const float AbsoluteHeadingError = FMath::Abs(HeadingError);
-
 	if (bFinalWaypoint)
 	{
-		UpdateArrivalState(DistanceToWaypoint, ForwardSpeed, AbsoluteHeadingError);
+		const float FinalHeadingError = FMath::Abs(
+			CalculateHeadingError(CalculateFinalHeadingTarget()));
 
 		// 목적지 안에서 속도와 방향이 모두 안정되면 자율주행 종료
 		if (DistanceToWaypoint <= GoalAcceptanceRadius
 			&& PlanarSpeed <= ArrivalSpeedThreshold
-			&& AbsoluteHeadingError <= FinalAlignmentTolerance)
+			&& FinalHeadingError <= FinalAlignmentTolerance)
 		{
 			FinishRoute();
 			return;
 		}
+
+		UpdateArrivalState(
+			CurrentLocation,
+			DistanceToWaypoint,
+			ForwardSpeed,
+			FinalHeadingError);
 	}
 
-	const float RudderInput = FMath::Clamp(HeadingError / FullRudderAngle, -1.0f, 1.0f);
-	const float ThrottleInput = bFinalWaypoint
-		&& ArrivalState != EBoatArrivalState::RouteFollowing
-		? CalculateArrivalThrottle(DistanceToWaypoint, ForwardSpeed)
-		: CalculateRouteThrottle(AbsoluteHeadingError);
+	const float BaseDesiredSpeed = CalculateBaseDesiredSpeed(
+		DistanceToWaypoint,
+		bFinalWaypoint);
 
-	MovementComponent->SetRudder(RudderInput);
-	MovementComponent->SetThrottle(ThrottleInput);
+	// 정확한 웨이포인트 대신 경로와 감속 상태에 맞는 앞쪽 지점을 바라봄
+	const FVector SteeringTarget = CalculateSteeringTarget(
+		CurrentLocation,
+		DistanceToWaypoint,
+		ForwardSpeed,
+		BaseDesiredSpeed);
+	const float HeadingError = CalculateHeadingError(SteeringTarget);
+	const float AbsoluteHeadingError = FMath::Abs(HeadingError);
+	const float DesiredSpeed = CalculateDesiredSpeed(BaseDesiredSpeed, AbsoluteHeadingError);
+
+	const float TargetRudderInput = FMath::Clamp(
+		HeadingError / FullRudderAngle,
+		-1.0f,
+		1.0f);
+	const bool bLowSpeedArrival = ArrivalState == EBoatArrivalState::FinalAligning
+		|| ArrivalState == EBoatArrivalState::FinalApproach;
+	const float MaxThrottle = bLowSpeedArrival ? FinalApproachThrottle : CruiseThrottle;
+	const float TargetThrottleInput = CalculateTargetThrottle(
+		DesiredSpeed,
+		ForwardSpeed,
+		MaxThrottle);
+
+	UpdateSmoothedInputs(TargetThrottleInput, TargetRudderInput, DeltaTime);
 
 	if (bDrawDebugRoute)
 	{
@@ -374,31 +409,243 @@ FVector UBoatAutopilotComponent::CalculateFinalHeadingTarget() const
 	return GoalLocation + FinalDirection * FinalHeadingTargetDistance;
 }
 
+FVector UBoatAutopilotComponent::CalculateSteeringTarget(
+	const FVector& CurrentLocation,
+	const float DistanceToGoal,
+	const float ForwardSpeed,
+	const float DesiredSpeed)
+{
+	if (ArrivalState == EBoatArrivalState::RecoveryReturn)
+	{
+		bRudderBrakeActive = false;
+		bRudderBrakeCentering = false;
+		return GetRecoveryTarget();
+	}
+
+	const bool bFinalWaypoint = CurrentWaypointIndex == Waypoints.Num() - 1;
+	if (!bFinalWaypoint || ArrivalState == EBoatArrivalState::RouteFollowing)
+	{
+		bRudderBrakeActive = false;
+		bRudderBrakeCentering = false;
+		return CalculateLookAheadTarget(CurrentLocation);
+	}
+
+	if (ArrivalState != EBoatArrivalState::FinalCoasting
+		|| DistanceToGoal <= FinalStopSlowdownDistance)
+	{
+		bRudderBrakeActive = false;
+		bRudderBrakeCentering = false;
+		return CalculateFinalHeadingTarget();
+	}
+
+	const float SpeedExcess = ForwardSpeed - DesiredSpeed;
+	const float RudderBrakeReleaseSpeed =
+		RudderBrakeSpeedTolerance * RudderBrakeReleaseRatio;
+
+	if (bRudderBrakeActive)
+	{
+		bRudderBrakeActive = SpeedExcess > RudderBrakeReleaseSpeed;
+	}
+	else
+	{
+		bRudderBrakeActive = SpeedExcess > RudderBrakeSpeedTolerance;
+	}
+
+	if (!bRudderBrakeActive)
+	{
+		bRudderBrakeCentering = false;
+		return CalculateFinalHeadingTarget();
+	}
+
+	const float AbsoluteCrossTrackDistance = FMath::Abs(
+		CalculateFinalCrossTrackDistance(CurrentLocation));
+	const float CenteringReleaseDistance =
+		RudderBrakeCorridor * RudderBrakeCenteringReleaseRatio;
+
+	if (bRudderBrakeCentering)
+	{
+		bRudderBrakeCentering = AbsoluteCrossTrackDistance > CenteringReleaseDistance;
+	}
+	else
+	{
+		bRudderBrakeCentering = AbsoluteCrossTrackDistance >= RudderBrakeCorridor;
+	}
+
+	if (bRudderBrakeCentering)
+	{
+		return CalculateFinalPathTarget(CurrentLocation);
+	}
+
+	const float SpeedFadeRange = FMath::Max(
+		RudderBrakeSpeedTolerance - RudderBrakeReleaseSpeed,
+		1.0f);
+	const float SpeedStrength = FMath::Clamp(
+		(SpeedExcess - RudderBrakeReleaseSpeed) / SpeedFadeRange,
+		0.0f,
+		1.0f);
+	const float DistanceStrength = FMath::Clamp(
+		(DistanceToGoal - FinalStopSlowdownDistance) / FMath::Max(LookAheadDistance, 1.0f),
+		0.0f,
+		1.0f);
+	const float BrakeStrength = FMath::Min(SpeedStrength, DistanceStrength);
+
+	return CalculateRudderBrakeTarget(CurrentLocation, BrakeStrength);
+}
+
+FVector UBoatAutopilotComponent::CalculateRudderBrakeTarget(
+	const FVector& CurrentLocation,
+	const float BrakeStrength)
+{
+	const float BrakeAngle = RudderBrakeAngle * FMath::Clamp(BrakeStrength, 0.0f, 1.0f);
+	if (BrakeAngle <= RudderBrakeHeadingTolerance)
+	{
+		return CalculateFinalPathTarget(CurrentLocation);
+	}
+
+	const FVector FinalDirection = GetFinalRouteDirection();
+	const auto MakeTarget = [this, &CurrentLocation, &FinalDirection, BrakeAngle](
+		const EBoatRudderBrakeSide Side)
+	{
+		const float DirectionSign = Side == EBoatRudderBrakeSide::Starboard ? 1.0f : -1.0f;
+		const FVector BrakeDirection = FinalDirection.RotateAngleAxis(
+			BrakeAngle * DirectionSign,
+			FVector::UpVector);
+		return CurrentLocation + BrakeDirection * LookAheadDistance;
+	};
+
+	FVector BrakeTarget = MakeTarget(RudderBrakeSide);
+	if (FMath::Abs(CalculateHeadingError(BrakeTarget)) <= RudderBrakeHeadingTolerance)
+	{
+		RudderBrakeSide = RudderBrakeSide == EBoatRudderBrakeSide::Port
+			? EBoatRudderBrakeSide::Starboard
+			: EBoatRudderBrakeSide::Port;
+		BrakeTarget = MakeTarget(RudderBrakeSide);
+	}
+
+	return BrakeTarget;
+}
+
+FVector UBoatAutopilotComponent::CalculateFinalPathTarget(const FVector& CurrentLocation) const
+{
+	if (Waypoints.Num() < 2)
+	{
+		return CalculateFinalHeadingTarget();
+	}
+
+	const FVector SegmentStart = Waypoints[Waypoints.Num() - 2];
+	const FVector FinalDirection = GetFinalRouteDirection();
+	FVector FromStart = CurrentLocation - SegmentStart;
+	FromStart.Z = 0.0f;
+	const FVector ProjectedLocation =
+		SegmentStart + FinalDirection * FVector::DotProduct(FromStart, FinalDirection);
+
+	return ProjectedLocation + FinalDirection * LookAheadDistance;
+}
+
+FVector UBoatAutopilotComponent::GetFinalRouteDirection() const
+{
+	if (Waypoints.Num() >= 2)
+	{
+		FVector FinalDirection = Waypoints.Last() - Waypoints[Waypoints.Num() - 2];
+		FinalDirection.Z = 0.0f;
+		if (FinalDirection.Normalize())
+		{
+			return FinalDirection;
+		}
+	}
+
+	const AActor* Owner = GetOwner();
+	return Owner != nullptr
+		? Owner->GetActorForwardVector().GetSafeNormal2D()
+		: FVector::ForwardVector;
+}
+
+float UBoatAutopilotComponent::CalculateFinalCrossTrackDistance(
+	const FVector& CurrentLocation) const
+{
+	if (Waypoints.Num() < 2)
+	{
+		return 0.0f;
+	}
+
+	FVector FromStart = CurrentLocation - Waypoints[Waypoints.Num() - 2];
+	FromStart.Z = 0.0f;
+	return FVector::CrossProduct(GetFinalRouteDirection(), FromStart).Z;
+}
+
+bool UBoatAutopilotComponent::HasPassedGoalPlane(const FVector& CurrentLocation) const
+{
+	if (Waypoints.IsEmpty())
+	{
+		return false;
+	}
+
+	FVector FromGoal = CurrentLocation - Waypoints.Last();
+	FromGoal.Z = 0.0f;
+	return FVector::DotProduct(FromGoal, GetFinalRouteDirection()) > GoalAcceptanceRadius;
+}
+
+FVector UBoatAutopilotComponent::GetRecoveryTarget() const
+{
+	return Waypoints.Num() >= 2
+		? Waypoints[Waypoints.Num() - 2]
+		: RouteStartLocation;
+}
+
 void UBoatAutopilotComponent::UpdateArrivalState(
+	const FVector& CurrentLocation,
 	const float DistanceToGoal,
 	const float ForwardSpeed,
 	const float AbsoluteHeadingError)
 {
+	if (ArrivalState == EBoatArrivalState::Arrived)
+	{
+		return;
+	}
+
+	// 목적지를 지나치면 후진하지 않고 마지막 안전 지점으로 복귀
+	if (ArrivalState != EBoatArrivalState::RecoveryReturn
+		&& HasPassedGoalPlane(CurrentLocation))
+	{
+		ArrivalState = EBoatArrivalState::RecoveryReturn;
+		bRudderBrakeActive = false;
+		bRudderBrakeCentering = false;
+		return;
+	}
+
+	if (ArrivalState == EBoatArrivalState::RecoveryReturn)
+	{
+		if (FVector::Dist2D(CurrentLocation, GetRecoveryTarget()) <= WaypointAcceptanceRadius)
+		{
+			ArrivalState = EBoatArrivalState::FinalCoasting;
+			RudderBrakeSide = EBoatRudderBrakeSide::Port;
+		}
+		return;
+	}
+
 	switch (ArrivalState)
 	{
 	case EBoatArrivalState::RouteFollowing:
 		if (DistanceToGoal <= GoalSlowdownDistance)
 		{
-			ArrivalState = EBoatArrivalState::FinalBraking;
+			ArrivalState = EBoatArrivalState::FinalCoasting;
 		}
 		break;
 
-	case EBoatArrivalState::FinalBraking:
-		if (ForwardSpeed <= FinalApproachSpeed)
+	case EBoatArrivalState::FinalCoasting:
+		if (DistanceToGoal <= FinalStopSlowdownDistance
+			&& ForwardSpeed <= FinalApproachSpeed)
 		{
 			ArrivalState = EBoatArrivalState::FinalAligning;
+			bRudderBrakeActive = false;
+			bRudderBrakeCentering = false;
 		}
 		break;
 
 	case EBoatArrivalState::FinalAligning:
-		if (ForwardSpeed > FinalApproachSpeed)
+		if (ForwardSpeed > FinalApproachSpeed + RudderBrakeSpeedTolerance)
 		{
-			ArrivalState = EBoatArrivalState::FinalBraking;
+			ArrivalState = EBoatArrivalState::FinalCoasting;
 		}
 		else if (AbsoluteHeadingError <= FinalAlignmentTolerance)
 		{
@@ -408,64 +655,170 @@ void UBoatAutopilotComponent::UpdateArrivalState(
 
 	case EBoatArrivalState::FinalApproach:
 		// 진입 단계가 자주 바뀌지 않도록 허용 각도의 두 배에서 다시 정렬
-		if (AbsoluteHeadingError > FinalAlignmentTolerance * 2.0f)
+		if (ForwardSpeed > FinalApproachSpeed + RudderBrakeSpeedTolerance)
+		{
+			ArrivalState = EBoatArrivalState::FinalCoasting;
+		}
+		else if (AbsoluteHeadingError > FinalAlignmentTolerance * 2.0f)
 		{
 			ArrivalState = EBoatArrivalState::FinalAligning;
 		}
 		break;
 
+	case EBoatArrivalState::RecoveryReturn:
 	case EBoatArrivalState::Arrived:
 		break;
 	}
 }
 
-float UBoatAutopilotComponent::CalculateRouteThrottle(const float AbsoluteHeadingError) const
+float UBoatAutopilotComponent::CalculateBaseDesiredSpeed(
+	const float DistanceToWaypoint,
+	const bool bFinalWaypoint) const
 {
-	// 방향 오차가 커질수록 추진 입력을 낮춰 선회 거리 확보
-	const float HeadingRatio = FMath::Clamp(AbsoluteHeadingError / 90.0f, 0.0f, 1.0f);
-	return FMath::Lerp(CruiseThrottle, TurningThrottle, HeadingRatio);
-}
-
-float UBoatAutopilotComponent::CalculateArrivalThrottle(
-	const float DistanceToGoal,
-	const float ForwardSpeed) const
-{
-	switch (ArrivalState)
+	if (ArrivalState == EBoatArrivalState::RecoveryReturn)
 	{
-	case EBoatArrivalState::FinalBraking:
-		return ForwardSpeed > FinalApproachSpeed ? -BrakingThrottle : 0.0f;
-
-	case EBoatArrivalState::FinalAligning:
-		if (ForwardSpeed > FinalApproachSpeed)
-		{
-			return -BrakingThrottle;
-		}
-
-		// 방향타가 작동할 수 있도록 너무 느려지면 약하게 전진
-		return ForwardSpeed < FinalApproachSpeed * 0.5f ? FinalApproachThrottle : 0.0f;
-
-	case EBoatArrivalState::FinalApproach:
-		// 도착 반경 안에서는 추진하지 않고 남은 관성만 제거
-		if (DistanceToGoal <= GoalAcceptanceRadius)
-		{
-			if (ForwardSpeed > ArrivalSpeedThreshold)
-			{
-				return -BrakingThrottle;
-			}
-
-			return ForwardSpeed < -ArrivalSpeedThreshold ? FinalApproachThrottle : 0.0f;
-		}
-
-		return ForwardSpeed > FinalApproachSpeed
-			? -BrakingThrottle
-			: FinalApproachThrottle;
-
-	case EBoatArrivalState::RouteFollowing:
-	case EBoatArrivalState::Arrived:
-		return 0.0f;
+		return RecoveryTurnSpeed;
 	}
 
-	return 0.0f;
+	if (bFinalWaypoint)
+	{
+		float DesiredSpeed = CalculateFinalDesiredSpeed(DistanceToWaypoint);
+		if (ArrivalState == EBoatArrivalState::FinalAligning)
+		{
+			// 방향타가 작동할 수 있도록 정렬 중에는 최소 저속 유지
+			DesiredSpeed = FMath::Max(DesiredSpeed, FinalApproachSpeed * 0.5f);
+		}
+		return DesiredSpeed;
+	}
+
+	const float TargetWaypointSpeed = CalculateWaypointTargetSpeed(CurrentWaypointIndex);
+	const float SlowdownRange = FMath::Max(
+		WaypointSlowdownDistance - WaypointAcceptanceRadius,
+		1.0f);
+	const float DistanceRatio =
+		(DistanceToWaypoint - WaypointAcceptanceRadius) / SlowdownRange;
+
+	return FMath::Lerp(
+		TargetWaypointSpeed,
+		CruiseSpeed,
+		SmoothRatio(DistanceRatio));
+}
+
+float UBoatAutopilotComponent::CalculateWaypointTargetSpeed(const int32 WaypointIndex) const
+{
+	if (!Waypoints.IsValidIndex(WaypointIndex)
+		|| !Waypoints.IsValidIndex(WaypointIndex + 1))
+	{
+		return CruiseSpeed;
+	}
+
+	FVector IncomingDirection = Waypoints[WaypointIndex] - GetSegmentStart(WaypointIndex);
+	FVector OutgoingDirection = Waypoints[WaypointIndex + 1] - Waypoints[WaypointIndex];
+	IncomingDirection.Z = 0.0f;
+	OutgoingDirection.Z = 0.0f;
+
+	if (!IncomingDirection.Normalize() || !OutgoingDirection.Normalize())
+	{
+		return CruiseSpeed;
+	}
+
+	const float DirectionDot = FMath::Clamp(
+		FVector::DotProduct(IncomingDirection, OutgoingDirection),
+		-1.0f,
+		1.0f);
+	const float CornerAngle = FMath::RadiansToDegrees(FMath::Acos(DirectionDot));
+	const float CornerRatio = FMath::Clamp(
+		CornerAngle / CornerReferenceAngle,
+		0.0f,
+		1.0f);
+
+	return FMath::Lerp(CruiseSpeed, MinimumWaypointSpeed, CornerRatio);
+}
+
+float UBoatAutopilotComponent::CalculateFinalDesiredSpeed(const float DistanceToGoal) const
+{
+	if (DistanceToGoal >= GoalSlowdownDistance)
+	{
+		return CruiseSpeed;
+	}
+
+	if (DistanceToGoal > FinalStopSlowdownDistance)
+	{
+		const float SlowdownRange = FMath::Max(
+			GoalSlowdownDistance - FinalStopSlowdownDistance,
+			1.0f);
+		const float DistanceRatio =
+			(DistanceToGoal - FinalStopSlowdownDistance) / SlowdownRange;
+		return FMath::Lerp(
+			FinalApproachSpeed,
+			CruiseSpeed,
+			SmoothRatio(DistanceRatio));
+	}
+
+	const float StopRange = FMath::Max(
+		FinalStopSlowdownDistance - GoalAcceptanceRadius,
+		1.0f);
+	const float StopRatio =
+		(DistanceToGoal - GoalAcceptanceRadius) / StopRange;
+	return FinalApproachSpeed * SmoothRatio(StopRatio);
+}
+
+float UBoatAutopilotComponent::CalculateDesiredSpeed(
+	const float BaseDesiredSpeed,
+	const float AbsoluteHeadingError) const
+{
+	const float HeadingRatio = FMath::Clamp(
+		AbsoluteHeadingError / HeadingSpeedReductionAngle,
+		0.0f,
+		1.0f);
+	const float HeadingLimitedSpeed = FMath::Lerp(
+		CruiseSpeed,
+		MinimumWaypointSpeed,
+		HeadingRatio);
+
+	return FMath::Max(0.0f, FMath::Min(BaseDesiredSpeed, HeadingLimitedSpeed));
+}
+
+float UBoatAutopilotComponent::CalculateTargetThrottle(
+	const float DesiredSpeed,
+	const float ForwardSpeed,
+	const float MaxThrottle) const
+{
+	const float SafeCruiseSpeed = FMath::Max(CruiseSpeed, 1.0f);
+	const float FeedForwardThrottle =
+		CruiseThrottle * FMath::Clamp(DesiredSpeed / SafeCruiseSpeed, 0.0f, 1.0f);
+	const float SpeedCorrection = (DesiredSpeed - ForwardSpeed) * SpeedControlGain;
+
+	// 자율주행은 역추진 없이 추진력 해제와 물의 저항으로만 감속
+	return FMath::Clamp(
+		FeedForwardThrottle + SpeedCorrection,
+		0.0f,
+		FMath::Clamp(MaxThrottle, 0.0f, 1.0f));
+}
+
+void UBoatAutopilotComponent::UpdateSmoothedInputs(
+	const float TargetThrottle,
+	const float TargetRudder,
+	const float DeltaTime)
+{
+	if (MovementComponent == nullptr)
+	{
+		return;
+	}
+
+	CurrentThrottleInput = FMath::FInterpConstantTo(
+		CurrentThrottleInput,
+		FMath::Clamp(TargetThrottle, 0.0f, 1.0f),
+		DeltaTime,
+		ThrottleChangeRate);
+	CurrentRudderInput = FMath::FInterpConstantTo(
+		CurrentRudderInput,
+		FMath::Clamp(TargetRudder, -1.0f, 1.0f),
+		DeltaTime,
+		RudderChangeRate);
+
+	MovementComponent->SetThrottle(CurrentThrottleInput);
+	MovementComponent->SetRudder(CurrentRudderInput);
 }
 
 void UBoatAutopilotComponent::FinishRoute()
@@ -476,6 +829,10 @@ void UBoatAutopilotComponent::FinishRoute()
 		MovementComponent->SetRudder(0.0f);
 	}
 
+	CurrentThrottleInput = 0.0f;
+	CurrentRudderInput = 0.0f;
+	bRudderBrakeActive = false;
+	bRudderBrakeCentering = false;
 	ArrivalState = EBoatArrivalState::Arrived;
 	bArrived = true;
 }

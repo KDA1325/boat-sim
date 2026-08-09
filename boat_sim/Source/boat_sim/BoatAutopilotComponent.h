@@ -14,10 +14,18 @@ class UPrimitiveComponent;
 enum class EBoatArrivalState : uint8
 {
 	RouteFollowing,
-	FinalBraking,
+	FinalCoasting,
 	FinalAligning,
 	FinalApproach,
+	RecoveryReturn,
 	Arrived
+};
+
+// 러더 감속 중 번갈아 바라볼 방향
+enum class EBoatRudderBrakeSide : uint8
+{
+	Port,
+	Starboard
 };
 
 // 장벽의 짧은 쪽으로 우회 경로를 만들고 선박 이동 컴포넌트를 제어
@@ -45,7 +53,7 @@ private:
 	AActor* FindActorWithTag(FName ActorTag) const;
 
 	// 현재 웨이포인트를 향해 선박 이동 입력 갱신
-	void FollowRoute();
+	void FollowRoute(float DeltaTime);
 
 	// 도달하거나 안전하게 지나친 중간 웨이포인트를 다음 목표로 전환
 	void AdvancePassedWaypoints(const FVector& CurrentLocation);
@@ -65,14 +73,55 @@ private:
 	// 최종 경로 방향을 유지하도록 목적지 앞쪽의 조향 목표 계산
 	FVector CalculateFinalHeadingTarget() const;
 
+	// 현재 도착 단계와 감속 상태에 맞는 조향 목표 계산
+	FVector CalculateSteeringTarget(
+		const FVector& CurrentLocation,
+		float DistanceToGoal,
+		float ForwardSpeed,
+		float DesiredSpeed);
+
+	// 최종 직선에서 완만한 좌우 선회로 항력을 만드는 목표 계산
+	FVector CalculateRudderBrakeTarget(const FVector& CurrentLocation, float BrakeStrength);
+
+	// 최종 경로 중심선 앞쪽의 복귀 목표 계산
+	FVector CalculateFinalPathTarget(const FVector& CurrentLocation) const;
+
+	// 마지막 중간 웨이포인트에서 목적지로 향하는 방향 반환
+	FVector GetFinalRouteDirection() const;
+
+	// 최종 경로 중심선에서 떨어진 좌우 거리 계산
+	float CalculateFinalCrossTrackDistance(const FVector& CurrentLocation) const;
+
+	// 선박이 최종 목적지 진행선을 통과했는지 확인
+	bool HasPassedGoalPlane(const FVector& CurrentLocation) const;
+
+	// 목적지를 지나쳤을 때 다시 돌아갈 안전 지점 반환
+	FVector GetRecoveryTarget() const;
+
 	// 목적지 거리와 현재 움직임에 따라 도착 단계 갱신
-	void UpdateArrivalState(float DistanceToGoal, float ForwardSpeed, float AbsoluteHeadingError);
+	void UpdateArrivalState(
+		const FVector& CurrentLocation,
+		float DistanceToGoal,
+		float ForwardSpeed,
+		float AbsoluteHeadingError);
 
-	// 일반 경로를 따라갈 때 방향 오차에 맞는 추진 입력 계산
-	float CalculateRouteThrottle(float AbsoluteHeadingError) const;
+	// 현재 웨이포인트와 남은 거리에 맞는 기본 목표 속도 계산
+	float CalculateBaseDesiredSpeed(float DistanceToWaypoint, bool bFinalWaypoint) const;
 
-	// 최종 감속과 저속 진입 단계에 맞는 추진 입력 계산
-	float CalculateArrivalThrottle(float DistanceToGoal, float ForwardSpeed) const;
+	// 중간 웨이포인트에서 다음 경로 각도에 맞는 통과 속도 계산
+	float CalculateWaypointTargetSpeed(int32 WaypointIndex) const;
+
+	// 최종 목적지까지 남은 거리에 맞는 목표 속도 계산
+	float CalculateFinalDesiredSpeed(float DistanceToGoal) const;
+
+	// 방향 오차를 반영해 최종 목표 속도 제한
+	float CalculateDesiredSpeed(float BaseDesiredSpeed, float AbsoluteHeadingError) const;
+
+	// 목표 속도와 현재 속도의 차이로 전진 추진 입력 계산
+	float CalculateTargetThrottle(float DesiredSpeed, float ForwardSpeed, float MaxThrottle) const;
+
+	// 추진과 방향타 입력이 갑자기 변하지 않도록 매 프레임 보간
+	void UpdateSmoothedInputs(float TargetThrottle, float TargetRudder, float DeltaTime);
 
 	// 모든 이동 입력을 해제하고 자율주행 종료
 	void FinishRoute();
@@ -126,11 +175,19 @@ private:
 
 	/* 직진할 때 사용할 최대 추진 입력 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float CruiseThrottle{0.8f};
+	float CruiseThrottle{0.5f};
 
-	/* 큰 각도로 선회할 때 사용할 추진 입력 */
-	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float TurningThrottle{0.25f};
+	/* 일반 경로를 따라갈 때 유지할 최대 전진 속도 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
+	float CruiseSpeed{220.0f};
+
+	/* 큰 각도의 중간 웨이포인트를 통과할 최소 속도 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float MinimumWaypointSpeed{120.0f};
+
+	/* 중간 웨이포인트에 접근하며 감속을 시작할 거리 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
+	float WaypointSlowdownDistance{500.0f};
 
 	/* 방향타 입력이 최대가 되는 방향 오차 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
@@ -138,11 +195,11 @@ private:
 
 	/* 최종 목적지에 접근하며 감속을 시작할 거리 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
-	float GoalSlowdownDistance{500.0f};
+	float GoalSlowdownDistance{900.0f};
 
-	/* 목적지 안에서 관성을 줄이기 위한 역추진 입력 */
-	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float BrakingThrottle{0.25f};
+	/* 최종 저속 진입을 위해 한 번 더 감속을 시작할 거리 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
+	float FinalStopSlowdownDistance{300.0f};
 
 	/* 최종 목적지에 접근할 때 유지할 최대 전진 속도 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
@@ -159,6 +216,38 @@ private:
 	/* 목적지 너머에서 최종 경로 방향을 맞추기 위한 조향 목표 거리 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
 	float FinalHeadingTargetDistance{200.0f};
+
+	/* 목표 속도와 현재 속도의 차이를 추진 입력으로 바꿀 비율 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float SpeedControlGain{0.004f};
+
+	/* 한 초 동안 변경할 수 있는 최대 추진 입력 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float ThrottleChangeRate{0.5f};
+
+	/* 한 초 동안 변경할 수 있는 최대 방향타 입력 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float RudderChangeRate{0.8f};
+
+	/* 목적지를 지나친 뒤 안전 경로로 돌아갈 때 유지할 속도 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float RecoveryTurnSpeed{100.0f};
+
+	/* 러더 감속 중 최종 경로에서 좌우로 기울일 최대 각도 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|RudderBrake", meta = (ClampMin = "0.0", ClampMax = "90.0"))
+	float RudderBrakeAngle{18.0f};
+
+	/* 러더 감속을 시작할 최소 목표 속도 초과량 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|RudderBrake", meta = (ClampMin = "0.0"))
+	float RudderBrakeSpeedTolerance{30.0f};
+
+	/* 반대쪽 러더 감속 목표로 전환할 방향 오차 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|RudderBrake", meta = (ClampMin = "0.0"))
+	float RudderBrakeHeadingTolerance{3.0f};
+
+	/* 러더 감속 중 최종 경로에서 벗어날 수 있는 최대 거리 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|RudderBrake", meta = (ClampMin = "1.0"))
+	float RudderBrakeCorridor{150.0f};
 
 	/* 생성된 웨이포인트와 이동 경로 표시 여부 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Debug")
@@ -187,7 +276,12 @@ private:
 	FVector RouteStartLocation{FVector::ZeroVector};
 
 	EBoatArrivalState ArrivalState{EBoatArrivalState::RouteFollowing};
+	EBoatRudderBrakeSide RudderBrakeSide{EBoatRudderBrakeSide::Port};
+	float CurrentThrottleInput{0.0f};
+	float CurrentRudderInput{0.0f};
 	int32 CurrentWaypointIndex{0};
+	bool bRudderBrakeActive{false};
+	bool bRudderBrakeCentering{false};
 	bool bRouteReady{false};
 	bool bArrived{false};
 };
