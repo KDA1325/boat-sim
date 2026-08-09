@@ -18,6 +18,7 @@ class UStaticMeshComponent;
  */
 class UBuoyancyComponent;
 class UBoatMovementComponent;
+class UBoatAutopilotComponent;
 
 // 선박 메시와 부력, 이동 컴포넌트를 하나로 묶는 액터
 UCLASS()
@@ -44,6 +45,10 @@ protected:
 	// 추진력, 저항력, 관성, 선회력 계산 컴포넌트
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat")
 	TObjectPtr<UBoatMovementComponent> MovementComponent;
+
+	// 자율 주행 경로 계산 컴포넌트
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Boat")
+	TObjectPtr<UBoatAutopilotComponent> AutopilotComponent;
 
 public:
 	// 매 프레임 호출
