@@ -10,6 +10,16 @@ class AActor;
 class UBoatMovementComponent;
 class UPrimitiveComponent;
 
+// 최종 목적지에 접근하며 수행할 주행 단계
+enum class EBoatArrivalState : uint8
+{
+	RouteFollowing,
+	FinalBraking,
+	FinalAligning,
+	FinalApproach,
+	Arrived
+};
+
 // 장벽의 짧은 쪽으로 우회 경로를 만들고 선박 이동 컴포넌트를 제어
 UCLASS(ClassGroup=(Boat), meta=(BlueprintSpawnableComponent))
 class BOAT_SIM_API UBoatAutopilotComponent : public UActorComponent
@@ -52,8 +62,17 @@ private:
 	// 현재 선박 방향과 목표 방향 사이의 좌우 각도 계산
 	float CalculateHeadingError(const FVector& TargetLocation) const;
 
-	// 방향 오차와 도착 거리에 따라 추진 입력 계산
-	float CalculateThrottle(float AbsoluteHeadingError, float DistanceToWaypoint, bool bFinalWaypoint) const;
+	// 최종 경로 방향을 유지하도록 목적지 앞쪽의 조향 목표 계산
+	FVector CalculateFinalHeadingTarget() const;
+
+	// 목적지 거리와 현재 움직임에 따라 도착 단계 갱신
+	void UpdateArrivalState(float DistanceToGoal, float ForwardSpeed, float AbsoluteHeadingError);
+
+	// 일반 경로를 따라갈 때 방향 오차에 맞는 추진 입력 계산
+	float CalculateRouteThrottle(float AbsoluteHeadingError) const;
+
+	// 최종 감속과 저속 진입 단계에 맞는 추진 입력 계산
+	float CalculateArrivalThrottle(float DistanceToGoal, float ForwardSpeed) const;
 
 	// 모든 이동 입력을 해제하고 자율주행 종료
 	void FinishRoute();
@@ -119,11 +138,27 @@ private:
 
 	/* 최종 목적지에 접근하며 감속을 시작할 거리 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
-	float GoalSlowdownDistance{350.0f};
+	float GoalSlowdownDistance{500.0f};
 
 	/* 목적지 안에서 관성을 줄이기 위한 역추진 입력 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float BrakingThrottle{0.25f};
+
+	/* 최종 목적지에 접근할 때 유지할 최대 전진 속도 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float FinalApproachSpeed{60.0f};
+
+	/* 저속으로 방향을 맞추고 최종 진입할 때 사용할 추진 입력 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float FinalApproachThrottle{0.15f};
+
+	/* 최종 진입을 시작할 수 있는 방향 오차 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	float FinalAlignmentTolerance{8.0f};
+
+	/* 목적지 너머에서 최종 경로 방향을 맞추기 위한 조향 목표 거리 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
+	float FinalHeadingTargetDistance{200.0f};
 
 	/* 생성된 웨이포인트와 이동 경로 표시 여부 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Debug")
@@ -151,6 +186,7 @@ private:
 	// 첫 번째 경로 구간이 시작되는 선박의 출발 위치
 	FVector RouteStartLocation{FVector::ZeroVector};
 
+	EBoatArrivalState ArrivalState{EBoatArrivalState::RouteFollowing};
 	int32 CurrentWaypointIndex{0};
 	bool bRouteReady{false};
 	bool bArrived{false};
