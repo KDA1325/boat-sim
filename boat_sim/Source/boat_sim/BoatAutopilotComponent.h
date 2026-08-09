@@ -165,9 +165,9 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
 	float LookAheadDistance{250.0f};
 
-	/* 최종 목적지에 도착했다고 판단할 거리 */
+	/* CenterCollision이 Endpoint 도착 영역 안에 들어왔다고 판단할 거리 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "1.0"))
-	float GoalAcceptanceRadius{100.0f};
+	float GoalAcceptanceRadius{40.0f};
 
 	/* 도착으로 인정할 최대 선박 속도 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Autopilot|Control", meta = (ClampMin = "0.0"))
