@@ -33,6 +33,9 @@ ABoatActor::ABoatActor()
 
 	// 화면 캡쳐는 전부 CaptureComponent가 처리
 	CaptureComponent = CreateDefaultSubobject<UBoatCaptureComponent>(TEXT("CaptureComponent"));
+	CaptureComponent->SetupAttachment(BoatMesh);
+	CaptureComponent->SetRelativeLocation(FVector(200.0f, 0.0f, 180.0f));
+	CaptureComponent->SetRelativeRotation(FRotator(-5.0f, 0.0f, 0.0f));
 }
 
 // 게임 시작 시 액터 초기화
