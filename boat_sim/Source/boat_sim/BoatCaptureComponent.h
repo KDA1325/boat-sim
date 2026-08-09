@@ -27,7 +27,7 @@ protected:
 	// 게임 시작 시 렌더 타깃과 실행별 저장 폴더 생성
 	virtual void BeginPlay() override;
 
-	// 게임 종료 전 대기 중인 이미지 저장과 manifest 작성 완료
+	// 게임 종료 전 대기 중인 이미지 저장과 manifest·binary archive 작성 완료
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 public:
@@ -70,6 +70,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Capture")
 	FString OutputFolderName{TEXT("BoatCaptures")};
 
+	// Binary Archive(바이너리 아카이브): 저장된 모든 Color·Depth PNG를 하나의 파일로 묶을지 여부
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Boat|Capture")
+	bool bWriteBinaryArchive{true};
+
 private:
 	// 통합 컬러와 깊이 캡처에 사용할 런타임 렌더 타깃 생성
 	bool InitializeRenderTargets();
@@ -106,6 +110,9 @@ private:
 
 	// 캡처 설정과 프레임별 시각을 JSON 파일로 기록
 	void WriteManifest() const;
+
+	// PNG 저장이 끝난 뒤 모든 프레임을 임의 접근 가능한 단일 바이너리 파일로 묶기
+	bool WriteBinaryArchive() const;
 
 	// RGB에는 HDR 컬러, A에는 실거리 깊이를 받을 통합 렌더 타깃
 	UPROPERTY(Transient)

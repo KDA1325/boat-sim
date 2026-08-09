@@ -2,6 +2,7 @@
 
 #include "BoatCaptureComponent.h"
 
+#include "Containers/StringConv.h"
 #include "Dom/JsonObject.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "HAL/FileManager.h"
@@ -26,6 +27,26 @@ namespace BoatCapture
 	constexpr int32 PngCompressionQuality{0};
 	constexpr int32 MinimumReadbackBufferCount{2};
 	constexpr int32 MaximumReadbackBufferCount{8};
+	constexpr int32 BinaryPrefixSize{32};
+	constexpr int32 BinaryIndexEntrySize{48};
+	constexpr int32 BinaryAlignment{8};
+	constexpr int32 BinaryCopyBufferSize{1024 * 1024};
+	constexpr uint16 BinaryFormatVersion{1};
+	constexpr TCHAR BinaryArchiveFilename[]{TEXT("capture.boatbin")};
+	constexpr TCHAR BinaryArchiveTemporaryFilename[]{TEXT("capture.boatbin.tmp")};
+
+	// Binary Format 1의 프레임 인덱스 한 줄에 기록할 파일 위치와 크기
+	struct FBinaryFrameEntry final
+	{
+		int32 FrameIndex{-1};
+		double TimestampMilliseconds{0.0};
+		FString ColorFilename;
+		FString DepthFilename;
+		uint64 ColorOffset{0};
+		uint64 ColorLength{0};
+		uint64 DepthOffset{0};
+		uint64 DepthLength{0};
+	};
 
 	// 한 Readback 슬롯이 게임 스레드, 렌더 스레드, GPU 중 어디까지 처리됐는지 표시
 	enum class EReadbackState : uint8
@@ -108,6 +129,47 @@ namespace BoatCapture
 		NewSetting.ShowFlagName = ShowFlagName;
 		NewSetting.Enabled = bEnabled;
 		ShowFlagSettings.Add(MoveTemp(NewSetting));
+	}
+
+	// Archive의 숫자 필드는 플랫폼과 관계없이 웹 DataView가 읽는 Little Endian으로 고정
+	template <typename TValue>
+	void WriteLittleEndian(FArchive& Archive, TValue Value)
+	{
+		Archive << Value;
+	}
+
+	// 큰 PNG도 한 번에 메모리에 올리지 않고 1MB 단위로 바이너리 파일에 복사
+	bool CopyFileToArchive(FArchive& Destination, const FString& SourceFilename, const uint64 ExpectedSize)
+	{
+		TUniquePtr<FArchive> Source{IFileManager::Get().CreateFileReader(*SourceFilename)};
+		if (!Source.IsValid())
+		{
+			return false;
+		}
+
+		TArray<uint8> CopyBuffer;
+		CopyBuffer.SetNumUninitialized(BinaryCopyBufferSize);
+		uint64 RemainingBytes{ExpectedSize};
+
+		while (RemainingBytes > 0)
+		{
+			const int64 CopySize{static_cast<int64>(FMath::Min<uint64>(RemainingBytes, BinaryCopyBufferSize))};
+			Source->Serialize(CopyBuffer.GetData(), CopySize);
+			if (Source->IsError())
+			{
+				return false;
+			}
+
+			Destination.Serialize(CopyBuffer.GetData(), CopySize);
+			if (Destination.IsError())
+			{
+				return false;
+			}
+
+			RemainingBytes -= static_cast<uint64>(CopySize);
+		}
+
+		return Source->TotalSize() == static_cast<int64>(ExpectedSize);
 	}
 }
 
@@ -200,7 +262,7 @@ void UBoatCaptureComponent::BeginPlay()
 	UE_LOG(LogTemp, Log, TEXT("BoatCapture: 이미지 저장을 시작합니다. %s"), *SessionOutputDirectory);
 }
 
-// 게임 종료 전 대기 중인 이미지 저장과 manifest 작성 완료
+// 게임 종료 전 대기 중인 이미지 저장과 manifest·binary archive 작성 완료
 void UBoatCaptureComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bIsCapturing = false;
@@ -211,9 +273,14 @@ void UBoatCaptureComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 	if (ImageWriteQueue != nullptr && !SessionOutputDirectory.IsEmpty())
 	{
-		// 비동기 PNG 파일이 모두 저장된 뒤 manifest 작성
+		// 비동기 PNG 파일이 모두 저장된 뒤 manifest와 선택 과제용 Binary Archive 작성
 		ImageWriteQueue->CreateFence().Wait();
 		WriteManifest();
+
+		if (bWriteBinaryArchive && !WriteBinaryArchive())
+		{
+			UE_LOG(LogTemp, Error, TEXT("BoatCapture: 바이너리 아카이브 생성에 실패했습니다."));
+		}
 	}
 
 	// FRHIGPUTextureReadback은 생성하고 사용한 렌더 스레드에서 안전하게 해제
@@ -724,4 +791,195 @@ void UBoatCaptureComponent::WriteManifest() const
 		DroppedCaptureCount,
 		FailedCaptureCount,
 		*SessionOutputDirectory);
+}
+
+// PNG 저장이 끝난 뒤 모든 프레임을 임의 접근 가능한 단일 바이너리 파일로 묶기
+bool UBoatCaptureComponent::WriteBinaryArchive() const
+{
+	if (SessionOutputDirectory.IsEmpty()
+		|| CapturedFrameIndices.IsEmpty()
+		|| CapturedFrameIndices.Num() != CapturedFrameTimesMilliseconds.Num())
+	{
+		UE_LOG(LogTemp, Error, TEXT("BoatCapture: 바이너리로 묶을 완전한 프레임 정보가 없습니다."));
+		return false;
+	}
+
+	TArray<int32> FrameOrder;
+	FrameOrder.SetNumUninitialized(CapturedFrameIndices.Num());
+	for (int32 ArrayIndex = 0; ArrayIndex < FrameOrder.Num(); ++ArrayIndex)
+	{
+		FrameOrder[ArrayIndex] = ArrayIndex;
+	}
+	FrameOrder.Sort(
+		[this](const int32 LeftArrayIndex, const int32 RightArrayIndex)
+		{
+			return CapturedFrameIndices[LeftArrayIndex] < CapturedFrameIndices[RightArrayIndex];
+		});
+
+	IFileManager& FileManager{IFileManager::Get()};
+	TArray<BoatCapture::FBinaryFrameEntry> FrameEntries;
+	FrameEntries.Reserve(FrameOrder.Num());
+
+	// PNG 저장 Fence가 끝났으므로 여기서 모든 파일의 실제 크기를 먼저 확인할 수 있음
+	for (const int32 ArrayIndex : FrameOrder)
+	{
+		const int32 FrameIndex{CapturedFrameIndices[ArrayIndex]};
+		const FString FrameFilename{FString::Printf(TEXT("frame_%06d.png"), FrameIndex)};
+		const FString ColorFilename{FPaths::Combine(ColorOutputDirectory, FrameFilename)};
+		const FString DepthFilename{FPaths::Combine(DepthOutputDirectory, FrameFilename)};
+		const int64 ColorFileSize{FileManager.FileSize(*ColorFilename)};
+		const int64 DepthFileSize{FileManager.FileSize(*DepthFilename)};
+
+		if (ColorFileSize <= 0 || DepthFileSize <= 0)
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("BoatCapture: %d번 프레임 PNG가 없거나 비어 있어 바이너리를 만들 수 없습니다."),
+				FrameIndex);
+			return false;
+		}
+
+		BoatCapture::FBinaryFrameEntry& Entry{FrameEntries.Emplace_GetRef()};
+		Entry.FrameIndex = FrameIndex;
+		Entry.TimestampMilliseconds = CapturedFrameTimesMilliseconds[ArrayIndex];
+		Entry.ColorFilename = ColorFilename;
+		Entry.DepthFilename = DepthFilename;
+		Entry.ColorLength = static_cast<uint64>(ColorFileSize);
+		Entry.DepthLength = static_cast<uint64>(DepthFileSize);
+	}
+
+	// Binary 안의 JSON Metadata는 외부 manifest 없이 파일 하나만 선택해도 재생 설정을 복원함
+	TSharedRef<FJsonObject> MetadataObject{MakeShared<FJsonObject>()};
+	MetadataObject->SetStringField(TEXT("session_name"), FPaths::GetCleanFilename(SessionOutputDirectory));
+	MetadataObject->SetNumberField(TEXT("width"), CaptureWidth);
+	MetadataObject->SetNumberField(TEXT("height"), CaptureHeight);
+	MetadataObject->SetNumberField(TEXT("capture_interval_ms"), CaptureIntervalSeconds * 1000.0);
+	MetadataObject->SetNumberField(TEXT("depth_max_cm"), DepthMaxDistance);
+	MetadataObject->SetStringField(TEXT("color_encoding"), TEXT("image/png; ACES fitted; sRGB"));
+	MetadataObject->SetStringField(TEXT("depth_encoding"), TEXT("image/png; RGB8; near=255; far=0"));
+	MetadataObject->SetStringField(TEXT("capture_source"), TEXT("SceneColor HDR in RGB; SceneDepth in A"));
+	MetadataObject->SetStringField(TEXT("color_tone_mapping"), TEXT("ACES fitted; sRGB"));
+	MetadataObject->SetNumberField(TEXT("color_exposure_compensation_ev"), ColorExposureCompensation);
+	MetadataObject->SetStringField(TEXT("gpu_readback"), TEXT("FRHIGPUTextureReadback; asynchronous"));
+	MetadataObject->SetNumberField(
+		TEXT("readback_buffer_count"),
+		FMath::Clamp(ReadbackBufferCount, BoatCapture::MinimumReadbackBufferCount, BoatCapture::MaximumReadbackBufferCount));
+	MetadataObject->SetNumberField(TEXT("dropped_capture_count"), DroppedCaptureCount);
+	MetadataObject->SetNumberField(TEXT("failed_capture_count"), FailedCaptureCount);
+
+	FString MetadataJson;
+	const TSharedRef<TJsonWriter<>> MetadataWriter{TJsonWriterFactory<>::Create(&MetadataJson)};
+	if (!FJsonSerializer::Serialize(MetadataObject, MetadataWriter))
+	{
+		UE_LOG(LogTemp, Error, TEXT("BoatCapture: 바이너리 Metadata JSON 생성에 실패했습니다."));
+		return false;
+	}
+
+	const FTCHARToUTF8 MetadataUtf8{*MetadataJson};
+	if (MetadataUtf8.Length() <= 0)
+	{
+		return false;
+	}
+
+	const uint64 MetadataLength{static_cast<uint64>(MetadataUtf8.Length())};
+	if (MetadataLength > MAX_uint32)
+	{
+		UE_LOG(LogTemp, Error, TEXT("BoatCapture: 바이너리 Metadata가 허용 크기를 초과했습니다."));
+		return false;
+	}
+
+	const uint64 IndexOffset{Align(
+		static_cast<uint64>(BoatCapture::BinaryPrefixSize) + MetadataLength,
+		static_cast<uint64>(BoatCapture::BinaryAlignment))};
+	const uint64 PayloadOffset{
+		IndexOffset + static_cast<uint64>(FrameEntries.Num()) * BoatCapture::BinaryIndexEntrySize};
+	uint64 NextPayloadOffset{PayloadOffset};
+
+	for (BoatCapture::FBinaryFrameEntry& Entry : FrameEntries)
+	{
+		Entry.ColorOffset = NextPayloadOffset;
+		NextPayloadOffset += Entry.ColorLength;
+		Entry.DepthOffset = NextPayloadOffset;
+		NextPayloadOffset += Entry.DepthLength;
+	}
+
+	const FString FinalFilename{FPaths::Combine(SessionOutputDirectory, BoatCapture::BinaryArchiveFilename)};
+	const FString TemporaryFilename{
+		FPaths::Combine(SessionOutputDirectory, BoatCapture::BinaryArchiveTemporaryFilename)};
+	TUniquePtr<FArchive> Archive{FileManager.CreateFileWriter(*TemporaryFilename)};
+	if (!Archive.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("BoatCapture: 임시 바이너리 파일을 열지 못했습니다. %s"), *TemporaryFilename);
+		return false;
+	}
+
+	// FArchive 숫자 직렬화가 Win64 밖에서도 같은 Little Endian 결과를 만들도록 Byte Swapping 설정
+	Archive->SetByteSwapping(!PLATFORM_LITTLE_ENDIAN);
+	uint8 MagicBytes[8]{'B', 'O', 'A', 'T', 'C', 'A', 'P', 0};
+	Archive->Serialize(MagicBytes, UE_ARRAY_COUNT(MagicBytes));
+	BoatCapture::WriteLittleEndian(*Archive, BoatCapture::BinaryFormatVersion);
+	BoatCapture::WriteLittleEndian(*Archive, static_cast<uint16>(BoatCapture::BinaryPrefixSize));
+	BoatCapture::WriteLittleEndian(*Archive, static_cast<uint32>(MetadataLength));
+	BoatCapture::WriteLittleEndian(*Archive, static_cast<uint32>(FrameEntries.Num()));
+	BoatCapture::WriteLittleEndian(*Archive, static_cast<uint32>(BoatCapture::BinaryIndexEntrySize));
+	BoatCapture::WriteLittleEndian(*Archive, PayloadOffset);
+
+	Archive->Serialize(const_cast<ANSICHAR*>(MetadataUtf8.Get()), MetadataUtf8.Length());
+	const int32 PaddingSize{static_cast<int32>(IndexOffset - (BoatCapture::BinaryPrefixSize + MetadataLength))};
+	if (PaddingSize > 0)
+	{
+		TArray<uint8> Padding;
+		Padding.SetNumZeroed(PaddingSize);
+		Archive->Serialize(Padding.GetData(), Padding.Num());
+	}
+
+	// Index만 읽어도 원하는 Color·Depth PNG의 위치를 즉시 찾을 수 있도록 절대 Offset 기록
+	for (const BoatCapture::FBinaryFrameEntry& Entry : FrameEntries)
+	{
+		BoatCapture::WriteLittleEndian(*Archive, static_cast<uint32>(Entry.FrameIndex));
+		BoatCapture::WriteLittleEndian(*Archive, static_cast<uint32>(0));
+		BoatCapture::WriteLittleEndian(*Archive, Entry.TimestampMilliseconds);
+		BoatCapture::WriteLittleEndian(*Archive, Entry.ColorOffset);
+		BoatCapture::WriteLittleEndian(*Archive, Entry.ColorLength);
+		BoatCapture::WriteLittleEndian(*Archive, Entry.DepthOffset);
+		BoatCapture::WriteLittleEndian(*Archive, Entry.DepthLength);
+	}
+
+	bool bPayloadWriteSucceeded{!Archive->IsError()};
+	for (const BoatCapture::FBinaryFrameEntry& Entry : FrameEntries)
+	{
+		if (!bPayloadWriteSucceeded
+			|| !BoatCapture::CopyFileToArchive(*Archive, Entry.ColorFilename, Entry.ColorLength)
+			|| !BoatCapture::CopyFileToArchive(*Archive, Entry.DepthFilename, Entry.DepthLength))
+		{
+			bPayloadWriteSucceeded = false;
+			break;
+		}
+	}
+
+	const bool bClosedSuccessfully{Archive->Close()};
+	Archive.Reset();
+	if (!bPayloadWriteSucceeded || !bClosedSuccessfully)
+	{
+		FileManager.Delete(*TemporaryFilename, false, true);
+		UE_LOG(LogTemp, Error, TEXT("BoatCapture: 바이너리 Payload 기록 중 오류가 발생했습니다."));
+		return false;
+	}
+
+	// 완성 전 임시 파일이 정상 결과처럼 보이지 않도록 마지막 순간에만 최종 이름으로 변경
+	if (!FileManager.Move(*FinalFilename, *TemporaryFilename, true, true))
+	{
+		FileManager.Delete(*TemporaryFilename, false, true);
+		UE_LOG(LogTemp, Error, TEXT("BoatCapture: 바이너리 파일 이름 변경에 실패했습니다. %s"), *FinalFilename);
+		return false;
+	}
+
+	UE_LOG(
+		LogTemp,
+		Log,
+		TEXT("BoatCapture: %d개 프레임을 단일 바이너리로 저장했습니다. %s"),
+		FrameEntries.Num(),
+		*FinalFilename);
+	return true;
 }
