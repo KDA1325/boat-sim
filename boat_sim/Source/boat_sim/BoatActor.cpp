@@ -17,9 +17,8 @@ ABoatActor::ABoatActor()
 	BoatMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BoatMesh"));
 	SetRootComponent(BoatMesh);
 
-	// 선박 메시의 물리 시뮬레이션 활성화 및 질량 설정
+	// 선박 메시의 물리 시뮬레이션 활성화
 	BoatMesh->SetSimulatePhysics(true);
-	BoatMesh->SetMassOverrideInKg(NAME_None, 100.0f);
 
 	// Water 플러그인 부력 기능용 컴포넌트 생성
 	// Pontoon 개수와 배치는 BP_BoatActor에서 관리
@@ -42,6 +41,9 @@ ABoatActor::ABoatActor()
 void ABoatActor::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// CDO 생성이 끝난 실제 선박 인스턴스에 질량 적용
+	BoatMesh->SetMassOverrideInKg(NAME_None, 100.0f);
 }
 
 // 매 프레임 액터 상태 갱신
