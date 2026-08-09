@@ -4,6 +4,7 @@
 #include "BoatMovementComponent.h"
 #include "BuoyancyComponent.h"
 #include "BoatAutopilotComponent.h"
+#include "BoatCaptureComponent.h"
 #include "Components/StaticMeshComponent.h"
 
 // 선박에 필요한 기본 컴포넌트와 물리 설정 생성
@@ -29,6 +30,9 @@ ABoatActor::ABoatActor()
 
 	// 경로 계산은 전부 AutopilotComponent가 처리
 	AutopilotComponent = CreateDefaultSubobject<UBoatAutopilotComponent>(TEXT("AutopilotComponent"));
+
+	// 화면 캡쳐는 전부 CaptureComponent가 처리
+	CaptureComponent = CreateDefaultSubobject<UBoatCaptureComponent>(TEXT("CaptureComponent"));
 }
 
 // 게임 시작 시 액터 초기화
