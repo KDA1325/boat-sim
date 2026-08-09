@@ -46,14 +46,141 @@ function createFileMap(manifest) {
     return files;
 }
 
+function createBinaryFile(options = {}) {
+    const metadata = Object.assign({
+        session_name: "binary-session",
+        width: 1280,
+        height: 720,
+        capture_interval_ms: 100,
+        depth_max_cm: 5000,
+        color_encoding: "image/png; ACES fitted; sRGB",
+        depth_encoding: "image/png; RGB8; near=255; far=0",
+        gpu_readback: "FRHIGPUTextureReadback; asynchronous",
+        readback_buffer_count: 3,
+        dropped_capture_count: 0,
+        failed_capture_count: 0,
+        color_tone_mapping: "ACES fitted; sRGB"
+    }, options.metadata || {});
+    const frames = options.frames || [
+        { index: 0, timestampMs: 5, colorLength: 9, depthLength: 10 },
+        { index: 1, timestampMs: 105, colorLength: 11, depthLength: 12 }
+    ];
+    const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+    const prefixSize = core.BINARY_PREFIX_SIZE;
+    const indexOffset = Math.ceil((prefixSize + metadataBytes.length) / 8) * 8;
+    const payloadOffset = indexOffset + frames.length * core.BINARY_INDEX_ENTRY_SIZE;
+    const payloadLength = frames.reduce(function (sum, frame) {
+        return sum + frame.colorLength + frame.depthLength;
+    }, 0);
+    const bytes = new Uint8Array(payloadOffset + payloadLength);
+    const view = new DataView(bytes.buffer);
+    const magic = [0x42, 0x4f, 0x41, 0x54, 0x43, 0x41, 0x50, 0x00];
+    bytes.set(magic, 0);
+    view.setUint16(8, options.version === undefined ? 1 : options.version, true);
+    view.setUint16(10, prefixSize, true);
+    view.setUint32(12, metadataBytes.length, true);
+    view.setUint32(16, frames.length, true);
+    view.setUint32(20, core.BINARY_INDEX_ENTRY_SIZE, true);
+    view.setBigUint64(24, BigInt(payloadOffset), true);
+    bytes.set(metadataBytes, prefixSize);
+
+    let nextPayloadOffset = payloadOffset;
+    frames.forEach(function (frame, position) {
+        const entryOffset = indexOffset + position * core.BINARY_INDEX_ENTRY_SIZE;
+        view.setUint32(entryOffset, frame.index, true);
+        view.setUint32(entryOffset + 4, 0, true);
+        view.setFloat64(entryOffset + 8, frame.timestampMs, true);
+        view.setBigUint64(entryOffset + 16, BigInt(nextPayloadOffset), true);
+        view.setBigUint64(entryOffset + 24, BigInt(frame.colorLength), true);
+        bytes.fill(0x43, nextPayloadOffset, nextPayloadOffset + frame.colorLength);
+        nextPayloadOffset += frame.colorLength;
+        view.setBigUint64(entryOffset + 32, BigInt(nextPayloadOffset), true);
+        view.setBigUint64(entryOffset + 40, BigInt(frame.depthLength), true);
+        bytes.fill(0x44, nextPayloadOffset, nextPayloadOffset + frame.depthLength);
+        nextPayloadOffset += frame.depthLength;
+    });
+
+    if (typeof options.mutate === "function") {
+        options.mutate(bytes, view, { indexOffset, payloadOffset });
+    }
+
+    const file = new Blob([bytes], { type: "application/octet-stream" });
+    Object.defineProperty(file, "name", { value: "capture.boatbin" });
+    return file;
+}
+
 test("validates Manifest 1.1 and normalizes timestamps", function () {
     const manifest = createManifest();
-    const session = core.buildPlaybackSession(manifest, createFileMap(manifest), "sample");
+    const files = createFileMap(manifest);
+    const session = core.buildPlaybackSession(manifest, files, "sample");
 
     assert.equal(session.metadata.version, "1.1");
     assert.equal(session.metadata.depthMaxCm, 5000);
+    assert.equal(session.sourceType, "folder");
+    assert.equal(session.frames[0].colorBlob, files.get("color/frame_000000.png"));
     assert.deepEqual(session.frames.map((frame) => frame.playbackTimeMs), [0, 100, 200]);
     assert.equal(session.warnings.length, 0);
+});
+
+test("loads Binary Format 1 without an external Manifest", async function () {
+    const session = await core.BinarySequenceLoader.load(createBinaryFile());
+
+    assert.equal(session.sourceType, "binary");
+    assert.equal(session.sessionName, "binary-session");
+    assert.equal(session.metadata.formatLabel, "Binary 1");
+    assert.equal(session.frames.length, 2);
+    assert.deepEqual(session.frames.map((frame) => frame.playbackTimeMs), [0, 100]);
+    assert.equal(session.frames[0].colorBlob.size, 9);
+    assert.equal(session.frames[0].depthBlob.size, 10);
+});
+
+test("rejects invalid Binary magic, version, and payload offsets", async function () {
+    await assert.rejects(
+        core.BinarySequenceLoader.load(createBinaryFile({
+            mutate: function (bytes) { bytes[0] = 0; }
+        })),
+        /Magic/
+    );
+
+    await assert.rejects(
+        core.BinarySequenceLoader.load(createBinaryFile({ version: 2 })),
+        /버전 1만/
+    );
+
+    await assert.rejects(
+        core.BinarySequenceLoader.load(createBinaryFile({
+            mutate: function (_bytes, view, offsets) {
+                view.setBigUint64(offsets.indexOffset + 16, BigInt(offsets.payloadOffset + 1), true);
+            }
+        })),
+        /연속적으로 배치/
+    );
+});
+
+test("rejects truncated Binary files and malformed metadata", async function () {
+    const validFile = createBinaryFile();
+    await assert.rejects(
+        core.BinarySequenceLoader.load(validFile.slice(0, 20)),
+        /Prefix가 잘렸습니다/
+    );
+
+    await assert.rejects(
+        core.BinarySequenceLoader.load(createBinaryFile({
+            mutate: function (bytes) {
+                bytes[core.BINARY_PREFIX_SIZE] = 0xff;
+            }
+        })),
+        /Metadata JSON/
+    );
+});
+
+test("creates deterministic random access orders without duplicates", function () {
+    const first = core.createShuffledOrder(12, 0xB0A7);
+    const second = core.createShuffledOrder(12, 0xB0A7);
+
+    assert.deepEqual(first, second);
+    assert.notDeepEqual(first, Array.from({ length: 12 }, (_value, index) => index));
+    assert.deepEqual(first.slice().sort((left, right) => left - right), Array.from({ length: 12 }, (_value, index) => index));
 });
 
 test("rejects Manifest versions other than 1.1", function () {
