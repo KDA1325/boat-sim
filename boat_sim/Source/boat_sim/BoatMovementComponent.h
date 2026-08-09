@@ -65,6 +65,14 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Boat|Movement|Resistance", meta = (ClampMin = "0.0"))
 	float LateralDragCoefficient{60.0f};
 
+	/* 방향타를 꺾었을 때 전후 움직임에 추가로 적용할 저항 계수 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Movement|Resistance", meta = (ClampMin = "0.0"))
+	float RudderDragCoefficient{0.03f};
+
+	/* 방향타 저항으로 한 번에 적용할 최대 힘 */
+	UPROPERTY(EditAnywhere, Category = "Boat|Movement|Resistance", meta = (ClampMin = "0.0"))
+	float MaxRudderDragForce{5000.0f};
+
 	/* 방향타 입력으로 적용할 최대 선회력 */
 	UPROPERTY(EditAnywhere, Category = "Boat|Movement|Steering", meta = (ClampMin = "0.0"))
 	float MaxSteeringTorque{180000.0f};

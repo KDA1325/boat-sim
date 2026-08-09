@@ -88,8 +88,18 @@ void UBoatMovementComponent::ApplyWaterResistance() const
 	const float ForwardSpeed = FVector::DotProduct(Velocity, Forward);
 	const float LateralSpeed = FVector::DotProduct(Velocity, Right);
 
-	// 각 이동 방향의 반대로 물의 저항력 적용
-	const FVector ResistanceForce = (-Forward * ForwardSpeed * ForwardDragCoefficient) + (-Right * LateralSpeed * LateralDragCoefficient);
+	// 방향타를 많이 꺾고 빠르게 이동할수록 추가 항력 증가
+	const float RudderDragMagnitude = FMath::Min(
+		FMath::Square(ForwardSpeed) * FMath::Abs(RudderInput) * RudderDragCoefficient,
+		MaxRudderDragForce);
+	const FVector RudderDragForce =
+		-Forward * FMath::Sign(ForwardSpeed) * RudderDragMagnitude;
+
+	// 각 이동 방향과 방향타 움직임의 반대로 물의 저항력 적용
+	const FVector ResistanceForce =
+		(-Forward * ForwardSpeed * ForwardDragCoefficient)
+		+ (-Right * LateralSpeed * LateralDragCoefficient)
+		+ RudderDragForce;
 
 	BoatBody->AddForce(ResistanceForce);
 }
