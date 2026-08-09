@@ -12,17 +12,21 @@
 <body>
     <header class="app-header">
         <div>
-            <p class="eyebrow">BOAT SIMULATION · PART 2B</p>
+            <p class="eyebrow">BOAT SIMULATION · PART 2B / 2C</p>
             <h1>Boat Capture Viewer</h1>
             <p class="header-description">
-                한 번의 레벨 플레이에서 저장한 Color·Depth 프레임을 실제 캡처 시간에 맞춰 재생합니다.
+                Color·Depth 프레임 폴더 또는 단일 바이너리를 실제 캡처 시간에 맞춰 재생합니다.
             </p>
         </div>
 
         <div class="folder-picker">
             <input id="folder-input" class="visually-hidden" type="file" webkitdirectory multiple>
-            <label class="primary-button" for="folder-input">캡처 세션 폴더 선택</label>
-            <p><code>boat_sim/Saved/BoatCaptures/&lt;세션 시각&gt;</code></p>
+            <input id="binary-input" class="visually-hidden" type="file" accept=".boatbin,application/octet-stream">
+            <div class="picker-actions">
+                <label class="primary-button" for="folder-input">세션 폴더 선택</label>
+                <label class="secondary-button" for="binary-input">capture.boatbin 선택</label>
+            </div>
+            <p><code>Saved/BoatCaptures/&lt;세션 시각&gt;</code></p>
         </div>
     </header>
 
@@ -31,7 +35,7 @@
             <div class="empty-icon" aria-hidden="true">10 Hz</div>
             <div>
                 <h2 id="empty-title">재생할 캡처 세션을 선택하세요</h2>
-                <p>Manifest 1.1이 들어 있는 타임스탬프 폴더 하나를 선택합니다.</p>
+                <p>Manifest 1.1 세션 폴더 또는 Binary Format 1 파일을 선택합니다.</p>
                 <p>별도 서버나 설치 없이 최신 Chrome 또는 Edge에서 바로 사용할 수 있습니다.</p>
             </div>
         </section>
@@ -45,7 +49,7 @@
                     <h2 id="session-name">-</h2>
                 </div>
                 <dl class="metadata-grid">
-                    <div><dt>Manifest</dt><dd id="meta-version">-</dd></div>
+                    <div><dt>형식</dt><dd id="meta-version">-</dd></div>
                     <div><dt>해상도</dt><dd id="meta-resolution">-</dd></div>
                     <div><dt>프레임</dt><dd id="meta-frame-count">-</dd></div>
                     <div><dt>저장 간격</dt><dd id="meta-interval">-</dd></div>
@@ -115,16 +119,53 @@
 
                     <div class="frame-readout" aria-live="polite">
                         <span><strong id="frame-position">0 / 0</strong> frame</span>
-                        <span>Manifest index <strong id="frame-index">-</strong></span>
+                        <span>Frame index <strong id="frame-index">-</strong></span>
                         <span>timestamp <strong id="frame-timestamp">-</strong></span>
                     </div>
                 </div>
+            </section>
+
+            <section id="benchmark-panel" class="benchmark-panel" aria-labelledby="benchmark-title" hidden>
+                <div class="benchmark-header">
+                    <div>
+                        <p class="eyebrow">PART 2C PERFORMANCE</p>
+                        <h3 id="benchmark-title">바이너리 이미지 접근 성능</h3>
+                    </div>
+                    <div class="benchmark-actions">
+                        <button id="benchmark-button" class="primary-button" type="button">성능 측정</button>
+                        <button id="benchmark-download-button" class="secondary-button" type="button" disabled>결과 JSON 저장</button>
+                    </div>
+                </div>
+
+                <p class="benchmark-description">
+                    바이너리 구간 읽기와 PNG 디코딩을 합친 시간을 Color·Depth 이미지 한 장 기준으로 측정합니다.
+                </p>
+                <progress id="benchmark-progress" max="1" value="0" hidden></progress>
+                <p id="benchmark-status" class="benchmark-status" aria-live="polite">측정 전</p>
+
+                <dl id="benchmark-results" class="benchmark-results" hidden>
+                    <div>
+                        <dt>순차 접근</dt>
+                        <dd><strong id="benchmark-sequential-total">-</strong> ms/image</dd>
+                        <span>Read <span id="benchmark-sequential-read">-</span> · Decode <span id="benchmark-sequential-decode">-</span></span>
+                    </div>
+                    <div>
+                        <dt>랜덤 접근</dt>
+                        <dd><strong id="benchmark-random-total">-</strong> ms/image</dd>
+                        <span>Read <span id="benchmark-random-read">-</span> · Decode <span id="benchmark-random-decode">-</span></span>
+                    </div>
+                    <div>
+                        <dt>표본</dt>
+                        <dd><strong id="benchmark-sample-count">-</strong> images</dd>
+                        <span id="benchmark-archive-size">-</span>
+                    </div>
+                </dl>
             </section>
         </section>
     </main>
 
     <footer>
-        <p>Depth는 저장된 RGB 0–255 명암값을 변경하지 않고 표시합니다.</p>
+        <p>Depth는 저장된 RGB 0–255 명암값을 변경하지 않고 표시하며, 바이너리 측정 결과는 JSON으로 저장할 수 있습니다.</p>
     </footer>
 </body>
 </html>

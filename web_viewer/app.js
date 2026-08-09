@@ -3,9 +3,14 @@
 
     const core = window.BoatViewerCore;
     const MAX_CACHED_FRAME_PAIRS = 6;
+    const BENCHMARK_WARMUP_IMAGE_COUNT = 10;
+    const BENCHMARK_ROUNDS_PER_MODE = 2;
+    const BENCHMARK_RANDOM_SEED = 0xB0A7;
+    const BENCHMARK_YIELD_INTERVAL = 16;
 
     const elements = {
         folderInput: document.getElementById("folder-input"),
+        binaryInput: document.getElementById("binary-input"),
         emptyState: document.getElementById("empty-state"),
         statusMessage: document.getElementById("status-message"),
         viewer: document.getElementById("viewer"),
@@ -34,7 +39,21 @@
         metaDuration: document.getElementById("meta-duration"),
         metaReadback: document.getElementById("meta-readback"),
         metaDropped: document.getElementById("meta-dropped"),
-        metaFailed: document.getElementById("meta-failed")
+        metaFailed: document.getElementById("meta-failed"),
+        benchmarkPanel: document.getElementById("benchmark-panel"),
+        benchmarkButton: document.getElementById("benchmark-button"),
+        benchmarkDownloadButton: document.getElementById("benchmark-download-button"),
+        benchmarkProgress: document.getElementById("benchmark-progress"),
+        benchmarkStatus: document.getElementById("benchmark-status"),
+        benchmarkResults: document.getElementById("benchmark-results"),
+        benchmarkSequentialTotal: document.getElementById("benchmark-sequential-total"),
+        benchmarkSequentialRead: document.getElementById("benchmark-sequential-read"),
+        benchmarkSequentialDecode: document.getElementById("benchmark-sequential-decode"),
+        benchmarkRandomTotal: document.getElementById("benchmark-random-total"),
+        benchmarkRandomRead: document.getElementById("benchmark-random-read"),
+        benchmarkRandomDecode: document.getElementById("benchmark-random-decode"),
+        benchmarkSampleCount: document.getElementById("benchmark-sample-count"),
+        benchmarkArchiveSize: document.getElementById("benchmark-archive-size")
     };
 
     const state = {
@@ -48,7 +67,9 @@
         playbackAnchorMs: 0,
         renderRequestToken: 0,
         cacheUseCounter: 0,
-        framePairCache: new Map()
+        framePairCache: new Map(),
+        isBenchmarking: false,
+        benchmarkResult: null
     };
 
     function formatMilliseconds(milliseconds) {
@@ -59,6 +80,18 @@
         return String(minutes).padStart(2, "0")
             + ":" + String(seconds).padStart(2, "0")
             + "." + String(millis).padStart(3, "0");
+    }
+
+    function formatBytes(bytes) {
+        const safeBytes = Math.max(0, Number.isFinite(bytes) ? bytes : 0);
+        const units = ["B", "KB", "MB", "GB", "TB"];
+        let value = safeBytes;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex += 1;
+        }
+        return value.toFixed(unitIndex === 0 ? 0 : 2) + " " + units[unitIndex];
     }
 
     function setStatus(message, kind) {
@@ -129,8 +162,8 @@
         }
 
         const frame = state.session.frames[position];
-        const colorUrl = URL.createObjectURL(frame.colorFile);
-        const depthUrl = URL.createObjectURL(frame.depthFile);
+        const colorUrl = URL.createObjectURL(frame.colorBlob);
+        const depthUrl = URL.createObjectURL(frame.depthBlob);
         const colorImage = new Image();
         const depthImage = new Image();
         colorImage.decoding = "async";
@@ -337,7 +370,7 @@
 
         document.documentElement.style.setProperty("--capture-aspect", metadata.width + " / " + metadata.height);
         elements.sessionName.textContent = session.sessionName;
-        elements.metaVersion.textContent = "v" + metadata.version;
+        elements.metaVersion.textContent = metadata.formatLabel || ("Manifest " + metadata.version);
         elements.metaResolution.textContent = metadata.width + " × " + metadata.height;
         elements.metaFrameCount.textContent = session.frames.length + " / " + metadata.declaredFrameCount;
         elements.metaInterval.textContent = metadata.captureIntervalMs.toFixed(2) + " ms · " + targetHz.toFixed(2) + " Hz";
@@ -355,7 +388,20 @@
         renderWarnings(session.warnings);
     }
 
-    async function loadSelectedFolder(fileList) {
+    function resetBenchmarkView() {
+        state.benchmarkResult = null;
+        elements.benchmarkProgress.hidden = true;
+        elements.benchmarkProgress.value = 0;
+        elements.benchmarkStatus.textContent = "측정 전";
+        elements.benchmarkResults.hidden = true;
+        elements.benchmarkDownloadButton.disabled = true;
+    }
+
+    /**
+     * 폴더와 바이너리 로더는 입력 방식만 다르고 이후 재생 상태 초기화 과정은 같습니다.
+     * 새 세션을 열 때 이전 Object URL과 성능 결과를 모두 정리해 서로 다른 세션 정보가 섞이지 않게 합니다.
+     */
+    async function loadSelectedSession(sessionLoader) {
         stopPlayback();
         state.renderRequestToken += 1;
         clearFramePairCache();
@@ -364,14 +410,17 @@
         state.displayedPosition = -1;
         state.requestedPosition = -1;
         setControlsEnabled(false);
+        elements.benchmarkPanel.hidden = true;
+        resetBenchmarkView();
         setStatus("캡처 세션을 확인하고 첫 프레임을 준비하고 있습니다.", "info");
 
         try {
-            const session = await core.FolderSequenceLoader.load(fileList);
+            const session = await sessionLoader();
             state.session = session;
             renderSessionMetadata(session);
             elements.emptyState.hidden = true;
             elements.viewer.hidden = false;
+            elements.benchmarkPanel.hidden = session.sourceType !== "binary";
             setControlsEnabled(true);
             const firstFrameReady = await showFrame(0);
             if (!firstFrameReady) {
@@ -387,10 +436,226 @@
             state.session = null;
             elements.viewer.hidden = true;
             elements.emptyState.hidden = false;
+            elements.benchmarkPanel.hidden = true;
             clearFramePairCache();
             setControlsEnabled(false);
             setStatus(error.message, "error");
         }
+    }
+
+    function loadSelectedFolder(fileList) {
+        return loadSelectedSession(function () {
+            return core.FolderSequenceLoader.load(fileList);
+        });
+    }
+
+    function loadSelectedBinary(file) {
+        return loadSelectedSession(function () {
+            return core.BinarySequenceLoader.load(file);
+        });
+    }
+
+    function createBinaryImageAccesses(session) {
+        const accesses = [];
+        session.frames.forEach(function (frame) {
+            accesses.push({
+                frameIndex: frame.index,
+                imageType: "color",
+                offset: frame.colorRange.offset,
+                length: frame.colorRange.length
+            });
+            accesses.push({
+                frameIndex: frame.index,
+                imageType: "depth",
+                offset: frame.depthRange.offset,
+                length: frame.depthRange.length
+            });
+        });
+        return accesses;
+    }
+
+    function nextAnimationFrame() {
+        return new Promise(function (resolve) {
+            requestAnimationFrame(resolve);
+        });
+    }
+
+    /**
+     * 한 이미지의 File Slice를 실제 ArrayBuffer로 읽은 뒤 PNG를 디코딩합니다.
+     * 화면 DOM 교체는 제외하고, 과제에서 비교할 수 있도록 Read와 Decode 시간을 따로 기록합니다.
+     */
+    async function measureBinaryImageAccess(archiveFile, access) {
+        const readStartedAt = performance.now();
+        const encodedBytes = await archiveFile
+            .slice(access.offset, access.offset + access.length)
+            .arrayBuffer();
+        const readFinishedAt = performance.now();
+
+        const decodeStartedAt = performance.now();
+        const bitmap = await createImageBitmap(new Blob([encodedBytes], { type: "image/png" }));
+        bitmap.close();
+        const decodeFinishedAt = performance.now();
+
+        return {
+            readMs: readFinishedAt - readStartedAt,
+            decodeMs: decodeFinishedAt - decodeStartedAt,
+            totalMs: decodeFinishedAt - readStartedAt
+        };
+    }
+
+    function createMetricAccumulator() {
+        return { samples: 0, readMs: 0, decodeMs: 0, totalMs: 0 };
+    }
+
+    function addMeasurement(accumulator, measurement) {
+        accumulator.samples += 1;
+        accumulator.readMs += measurement.readMs;
+        accumulator.decodeMs += measurement.decodeMs;
+        accumulator.totalMs += measurement.totalMs;
+    }
+
+    function averageMetric(accumulator) {
+        const divisor = Math.max(1, accumulator.samples);
+        return {
+            samples: accumulator.samples,
+            averageReadMs: accumulator.readMs / divisor,
+            averageDecodeMs: accumulator.decodeMs / divisor,
+            averageTotalMs: accumulator.totalMs / divisor
+        };
+    }
+
+    async function measureAccessOrder(accesses, order, accumulator, progressState, label) {
+        elements.benchmarkStatus.textContent = label;
+        for (let position = 0; position < order.length; position += 1) {
+            const measurement = await measureBinaryImageAccess(
+                state.session.archiveFile,
+                accesses[order[position]]
+            );
+            addMeasurement(accumulator, measurement);
+            progressState.completed += 1;
+            elements.benchmarkProgress.value = progressState.completed;
+
+            // 긴 세션에서도 버튼과 진행률이 갱신되도록 측정 구간 밖에서 브라우저에 제어권을 반환합니다.
+            if ((position + 1) % BENCHMARK_YIELD_INTERVAL === 0) {
+                await nextAnimationFrame();
+            }
+        }
+    }
+
+    function renderBenchmarkResult(result) {
+        const sequential = result.sequential;
+        const random = result.random;
+        elements.benchmarkSequentialTotal.textContent = sequential.averageTotalMs.toFixed(3);
+        elements.benchmarkSequentialRead.textContent = sequential.averageReadMs.toFixed(3) + " ms";
+        elements.benchmarkSequentialDecode.textContent = sequential.averageDecodeMs.toFixed(3) + " ms";
+        elements.benchmarkRandomTotal.textContent = random.averageTotalMs.toFixed(3);
+        elements.benchmarkRandomRead.textContent = random.averageReadMs.toFixed(3) + " ms";
+        elements.benchmarkRandomDecode.textContent = random.averageDecodeMs.toFixed(3) + " ms";
+        elements.benchmarkSampleCount.textContent = sequential.samples + " / mode";
+        elements.benchmarkArchiveSize.textContent = formatBytes(result.archive.sizeBytes);
+        elements.benchmarkResults.hidden = false;
+        elements.benchmarkDownloadButton.disabled = false;
+    }
+
+    /**
+     * 순차와 랜덤 순서를 앞뒤로 교차해 어느 한쪽만 두 번째 OS 캐시 효과를 받는 편향을 줄입니다.
+     * 재생 캐시는 먼저 비우며, 워밍업 10장은 평균 계산에서 제외합니다.
+     */
+    async function runBinaryBenchmark() {
+        if (!state.session || state.session.sourceType !== "binary" || state.isBenchmarking) {
+            return;
+        }
+        if (typeof createImageBitmap !== "function") {
+            elements.benchmarkStatus.textContent = "이 브라우저는 createImageBitmap()을 지원하지 않습니다.";
+            return;
+        }
+
+        stopPlayback();
+        const restorePosition = state.currentPosition;
+        state.renderRequestToken += 1;
+        clearFramePairCache();
+        state.isBenchmarking = true;
+        state.benchmarkResult = null;
+        setControlsEnabled(false);
+        elements.folderInput.disabled = true;
+        elements.binaryInput.disabled = true;
+        elements.benchmarkButton.disabled = true;
+        elements.benchmarkDownloadButton.disabled = true;
+        elements.benchmarkResults.hidden = true;
+        elements.benchmarkProgress.hidden = false;
+
+        const accesses = createBinaryImageAccesses(state.session);
+        const sequentialOrder = Array.from({ length: accesses.length }, function (_value, index) { return index; });
+        const randomOrder = core.createShuffledOrder(accesses.length, BENCHMARK_RANDOM_SEED);
+        const warmupCount = Math.min(BENCHMARK_WARMUP_IMAGE_COUNT, accesses.length);
+        const progressState = { completed: 0 };
+        elements.benchmarkProgress.max = warmupCount + accesses.length * BENCHMARK_ROUNDS_PER_MODE * 2;
+        elements.benchmarkProgress.value = 0;
+
+        try {
+            elements.benchmarkStatus.textContent = "워밍업 이미지를 읽고 있습니다.";
+            for (let index = 0; index < warmupCount; index += 1) {
+                await measureBinaryImageAccess(state.session.archiveFile, accesses[sequentialOrder[index]]);
+                progressState.completed += 1;
+                elements.benchmarkProgress.value = progressState.completed;
+            }
+
+            const sequentialAccumulator = createMetricAccumulator();
+            const randomAccumulator = createMetricAccumulator();
+            await measureAccessOrder(accesses, sequentialOrder, sequentialAccumulator, progressState, "1/4 순차 접근 측정 중");
+            await measureAccessOrder(accesses, randomOrder, randomAccumulator, progressState, "2/4 랜덤 접근 측정 중");
+            await measureAccessOrder(accesses, randomOrder, randomAccumulator, progressState, "3/4 랜덤 접근 측정 중");
+            await measureAccessOrder(accesses, sequentialOrder, sequentialAccumulator, progressState, "4/4 순차 접근 측정 중");
+
+            state.benchmarkResult = {
+                schemaVersion: "1.0",
+                measuredAt: new Date().toISOString(),
+                userAgent: navigator.userAgent,
+                metricDefinition: "File.slice().arrayBuffer() read + createImageBitmap() PNG decode; DOM paint excluded",
+                warmupImageCount: warmupCount,
+                roundsPerMode: BENCHMARK_ROUNDS_PER_MODE,
+                randomSeed: BENCHMARK_RANDOM_SEED,
+                archive: {
+                    name: state.session.metadata.archiveName,
+                    sizeBytes: state.session.metadata.archiveSizeBytes,
+                    frameCount: state.session.frames.length,
+                    imageCount: accesses.length
+                },
+                sequential: averageMetric(sequentialAccumulator),
+                random: averageMetric(randomAccumulator)
+            };
+            renderBenchmarkResult(state.benchmarkResult);
+            elements.benchmarkStatus.textContent = "측정 완료 · 보고서에는 Total 평균 ms/image 값을 사용합니다.";
+        } catch (error) {
+            elements.benchmarkStatus.textContent = "성능 측정 실패: " + error.message;
+        } finally {
+            state.isBenchmarking = false;
+            elements.folderInput.disabled = false;
+            elements.binaryInput.disabled = false;
+            elements.benchmarkButton.disabled = false;
+            setControlsEnabled(true);
+            await showFrame(restorePosition);
+        }
+    }
+
+    function downloadBenchmarkResult() {
+        if (!state.benchmarkResult) {
+            return;
+        }
+
+        const resultBlob = new Blob(
+            [JSON.stringify(state.benchmarkResult, null, 2)],
+            { type: "application/json;charset=utf-8" }
+        );
+        const resultUrl = URL.createObjectURL(resultBlob);
+        const downloadLink = document.createElement("a");
+        const timestamp = state.benchmarkResult.measuredAt.replace(/[:.]/g, "-");
+        downloadLink.href = resultUrl;
+        downloadLink.download = "boat_capture_benchmark_" + timestamp + ".json";
+        downloadLink.click();
+        setTimeout(function () {
+            URL.revokeObjectURL(resultUrl);
+        }, 0);
     }
 
     elements.folderInput.addEventListener("click", function () {
@@ -404,7 +669,20 @@
         }
     });
 
+    elements.binaryInput.addEventListener("click", function () {
+        // 같은 바이너리를 다시 선택해도 change 이벤트가 발생하도록 기존 선택값을 비웁니다.
+        elements.binaryInput.value = "";
+    });
+
+    elements.binaryInput.addEventListener("change", function (event) {
+        if (event.target.files && event.target.files.length === 1) {
+            loadSelectedBinary(event.target.files[0]);
+        }
+    });
+
     elements.playButton.addEventListener("click", togglePlayback);
+    elements.benchmarkButton.addEventListener("click", runBinaryBenchmark);
+    elements.benchmarkDownloadButton.addEventListener("click", downloadBenchmarkResult);
     elements.firstButton.addEventListener("click", function () { navigateTo(0); });
     elements.previousButton.addEventListener("click", function () { navigateTo(state.currentPosition - 1); });
     elements.nextButton.addEventListener("click", function () { navigateTo(state.currentPosition + 1); });

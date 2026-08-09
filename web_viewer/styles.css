@@ -42,7 +42,8 @@ input {
 }
 
 button,
-.primary-button {
+.primary-button,
+.secondary-button {
     border: 0;
     border-radius: 0.75rem;
     cursor: pointer;
@@ -51,6 +52,7 @@ button,
 
 button:focus-visible,
 .primary-button:focus-visible,
+.secondary-button:focus-visible,
 input:focus-visible {
     outline: 3px solid rgba(8, 126, 139, 0.35);
     outline-offset: 3px;
@@ -121,6 +123,14 @@ footer,
     font-size: 0.78rem;
 }
 
+.picker-actions,
+.benchmark-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.65rem;
+}
+
 code {
     font-family: "Cascadia Code", Consolas, monospace;
 }
@@ -142,6 +152,24 @@ code {
     transform: translateY(-1px);
 }
 
+.secondary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 3rem;
+    padding: 0.75rem 1.15rem;
+    border: 1px solid var(--line);
+    color: var(--primary-dark);
+    font-weight: 750;
+    background: var(--surface);
+}
+
+.secondary-button:hover {
+    border-color: #9bcbd0;
+    background: #e7f5f6;
+    transform: translateY(-1px);
+}
+
 .visually-hidden {
     position: absolute !important;
     width: 1px !important;
@@ -157,7 +185,8 @@ code {
 .empty-state,
 .session-summary,
 .capture-panel,
-.playback-controls {
+.playback-controls,
+.benchmark-panel {
     border: 1px solid var(--line);
     background: var(--surface);
     box-shadow: var(--shadow);
@@ -448,6 +477,70 @@ input[type="range"] {
     font-family: "Cascadia Code", Consolas, monospace;
 }
 
+.benchmark-panel {
+    display: grid;
+    gap: 1rem;
+    padding: 1.2rem;
+    border-radius: 1rem;
+}
+
+.benchmark-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.benchmark-header h3,
+.benchmark-description,
+.benchmark-status {
+    margin-bottom: 0;
+}
+
+.benchmark-description,
+.benchmark-status {
+    color: var(--muted);
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.benchmark-panel progress {
+    width: 100%;
+    height: 0.7rem;
+    accent-color: var(--primary);
+}
+
+.benchmark-results {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 0;
+}
+
+.benchmark-results div {
+    padding: 1rem;
+    border-radius: 0.75rem;
+    background: var(--surface-soft);
+}
+
+.benchmark-results dt {
+    margin-bottom: 0.35rem;
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.benchmark-results dd {
+    margin: 0 0 0.35rem;
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 0.9rem;
+}
+
+.benchmark-results span {
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
 footer {
     padding-block: 1.8rem 2.5rem;
     font-size: 0.78rem;
@@ -495,7 +588,14 @@ footer p {
     }
 
     .folder-picker,
-    .primary-button {
+    .primary-button,
+    .secondary-button {
+        width: 100%;
+    }
+
+    .picker-actions,
+    .benchmark-actions {
+        justify-content: stretch;
         width: 100%;
     }
 
@@ -549,6 +649,15 @@ footer p {
 
     .frame-readout {
         justify-content: center;
+    }
+
+    .benchmark-header {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .benchmark-results {
+        grid-template-columns: 1fr;
     }
 }
 
