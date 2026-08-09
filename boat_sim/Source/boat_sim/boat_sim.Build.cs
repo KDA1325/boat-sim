@@ -10,7 +10,7 @@ public class boat_sim : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Water" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "ImageCore", "ImageWriteQueue", "Json" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "ImageCore", "ImageWriteQueue", "Json", "RHI", "RenderCore" });
 
 		// Uncomment if you are using Slate UI
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
