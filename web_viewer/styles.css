@@ -1,0 +1,557 @@
+:root {
+    --background: #eef4f7;
+    --surface: #ffffff;
+    --surface-soft: #f6f9fb;
+    --line: #d6e1e7;
+    --text: #17262e;
+    --muted: #60737d;
+    --primary: #087e8b;
+    --primary-dark: #05616b;
+    --accent: #ffca56;
+    --warning: #8a5800;
+    --warning-background: #fff6df;
+    --error: #a82b31;
+    --error-background: #fff0f1;
+    --shadow: 0 18px 48px rgba(37, 66, 78, 0.12);
+    font-family: Inter, Pretendard, "Noto Sans KR", "Segoe UI", sans-serif;
+    color: var(--text);
+    background: var(--background);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    background:
+        radial-gradient(circle at 12% 0%, rgba(58, 177, 184, 0.12), transparent 32rem),
+        var(--background);
+}
+
+button,
+input {
+    font: inherit;
+}
+
+button,
+.primary-button {
+    border: 0;
+    border-radius: 0.75rem;
+    cursor: pointer;
+    transition: background-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+
+button:focus-visible,
+.primary-button:focus-visible,
+input:focus-visible {
+    outline: 3px solid rgba(8, 126, 139, 0.35);
+    outline-offset: 3px;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.38;
+}
+
+.app-header,
+main,
+footer {
+    width: min(1500px, calc(100% - 3rem));
+    margin-inline: auto;
+}
+
+.app-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 2rem;
+    padding-block: 3rem 2rem;
+}
+
+.eyebrow {
+    margin: 0 0 0.4rem;
+    color: var(--primary);
+    font-size: 0.74rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+}
+
+h1,
+h2,
+h3,
+p {
+    margin-top: 0;
+}
+
+h1 {
+    margin-bottom: 0.65rem;
+    font-size: clamp(2rem, 4vw, 3.7rem);
+    letter-spacing: -0.055em;
+}
+
+.header-description,
+.empty-state p,
+.folder-picker p,
+footer,
+.panel-description {
+    color: var(--muted);
+}
+
+.header-description {
+    max-width: 46rem;
+    margin-bottom: 0;
+    line-height: 1.65;
+}
+
+.folder-picker {
+    flex: 0 0 auto;
+    text-align: right;
+}
+
+.folder-picker p {
+    margin: 0.75rem 0 0;
+    font-size: 0.78rem;
+}
+
+code {
+    font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.primary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 3rem;
+    padding: 0.75rem 1.15rem;
+    color: white;
+    font-weight: 750;
+    background: var(--primary);
+    box-shadow: 0 10px 24px rgba(8, 126, 139, 0.2);
+}
+
+.primary-button:hover {
+    background: var(--primary-dark);
+    transform: translateY(-1px);
+}
+
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+.empty-state,
+.session-summary,
+.capture-panel,
+.playback-controls {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+    min-height: 28rem;
+    padding: 3rem;
+    border-radius: 1.4rem;
+}
+
+.empty-state p:last-child {
+    margin-bottom: 0;
+}
+
+.empty-icon {
+    display: grid;
+    place-items: center;
+    width: 8rem;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    color: var(--primary-dark);
+    font-size: 1.35rem;
+    font-weight: 850;
+    background: #dff3f4;
+    border: 1px solid #b9e0e3;
+}
+
+.status-message {
+    margin-bottom: 1rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    background: var(--surface);
+}
+
+.status-message[data-kind="error"] {
+    color: var(--error);
+    border-color: #efb6b9;
+    background: var(--error-background);
+}
+
+.viewer {
+    display: grid;
+    gap: 1rem;
+}
+
+.session-summary {
+    display: grid;
+    grid-template-columns: minmax(14rem, 0.9fr) minmax(30rem, 2.1fr);
+    gap: 2rem;
+    padding: 1.4rem;
+    border-radius: 1rem;
+}
+
+.session-summary h2 {
+    margin-bottom: 0;
+    overflow-wrap: anywhere;
+}
+
+.metadata-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(7rem, 1fr));
+    gap: 0.75rem;
+    margin: 0;
+}
+
+.metadata-grid div {
+    min-width: 0;
+    padding: 0.75rem;
+    border-radius: 0.7rem;
+    background: var(--surface-soft);
+}
+
+.metadata-grid dt {
+    margin-bottom: 0.25rem;
+    color: var(--muted);
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.metadata-grid dd {
+    margin: 0;
+    font-size: 0.87rem;
+    font-weight: 750;
+    overflow-wrap: anywhere;
+}
+
+.warning-panel {
+    padding: 1rem 1.2rem;
+    border: 1px solid #edcf8e;
+    border-radius: 0.85rem;
+    color: var(--warning);
+    background: var(--warning-background);
+}
+
+.warning-panel h3 {
+    margin-bottom: 0.5rem;
+    font-size: 0.95rem;
+}
+
+.warning-panel ul {
+    margin: 0;
+    padding-left: 1.2rem;
+    font-size: 0.86rem;
+    line-height: 1.65;
+}
+
+.capture-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.capture-panel {
+    min-width: 0;
+    overflow: hidden;
+    border-radius: 1rem;
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.2rem;
+}
+
+.panel-header h3 {
+    margin-bottom: 0;
+}
+
+.panel-badge {
+    padding: 0.35rem 0.6rem;
+    border-radius: 99rem;
+    color: var(--primary-dark);
+    font-size: 0.68rem;
+    font-weight: 800;
+    background: #dff3f4;
+}
+
+.depth-badge {
+    color: #5b4308;
+    background: #fff0bd;
+}
+
+.image-stage {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    aspect-ratio: var(--capture-aspect, 16 / 9);
+    overflow: hidden;
+    background:
+        linear-gradient(45deg, #1c292f 25%, transparent 25%),
+        linear-gradient(-45deg, #1c292f 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1c292f 75%),
+        linear-gradient(-45deg, transparent 75%, #1c292f 75%),
+        #152127;
+    background-size: 24px 24px;
+    background-position: 0 0, 0 12px, 12px -12px, -12px 0;
+}
+
+.image-stage img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.depth-stage img {
+    /* Depth는 PNG에 저장된 0~255 명암을 그대로 보여 주므로 CSS 필터를 적용하지 않습니다. */
+    filter: none;
+}
+
+.depth-legend {
+    position: absolute;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    display: grid;
+    grid-template-columns: auto minmax(5rem, 9rem) auto;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 0.55rem;
+    color: white;
+    font-size: 0.68rem;
+    background: rgba(11, 19, 23, 0.78);
+    backdrop-filter: blur(6px);
+}
+
+.depth-gradient {
+    height: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 99rem;
+    background: linear-gradient(to right, #fff, #000);
+}
+
+.panel-description {
+    min-height: 2.6rem;
+    margin: 0;
+    padding: 0.8rem 1.2rem;
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
+.playback-controls {
+    display: grid;
+    gap: 1rem;
+    padding: 1.2rem;
+    border-radius: 1rem;
+}
+
+.timeline-row {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr 5.5rem;
+    align-items: center;
+    gap: 0.8rem;
+    color: var(--muted);
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 0.75rem;
+}
+
+.timeline-row span:last-child {
+    text-align: right;
+}
+
+input[type="range"] {
+    width: 100%;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.control-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.transport-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.transport-buttons button {
+    display: grid;
+    place-items: center;
+    width: 2.55rem;
+    aspect-ratio: 1;
+    color: var(--text);
+    background: var(--surface-soft);
+}
+
+.transport-buttons button:not(:disabled):hover {
+    color: var(--primary-dark);
+    background: #dff3f4;
+}
+
+.transport-buttons .play-button {
+    width: 3.15rem;
+    color: white;
+    background: var(--primary);
+}
+
+.transport-buttons .play-button:not(:disabled):hover {
+    color: white;
+    background: var(--primary-dark);
+}
+
+.frame-readout {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.45rem 1.1rem;
+    color: var(--muted);
+    font-size: 0.76rem;
+}
+
+.frame-readout strong {
+    color: var(--text);
+    font-family: "Cascadia Code", Consolas, monospace;
+}
+
+footer {
+    padding-block: 1.8rem 2.5rem;
+    font-size: 0.78rem;
+    text-align: center;
+}
+
+footer p {
+    margin: 0;
+}
+
+@media (max-width: 1050px) {
+    .session-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .metadata-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 900px) {
+    .app-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .folder-picker {
+        text-align: left;
+    }
+
+    .capture-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 650px) {
+    .app-header,
+    main,
+    footer {
+        width: min(100% - 1.25rem, 1500px);
+    }
+
+    .app-header {
+        padding-top: 1.7rem;
+    }
+
+    .folder-picker,
+    .primary-button {
+        width: 100%;
+    }
+
+    .folder-picker p {
+        overflow-wrap: anywhere;
+    }
+
+    .empty-state {
+        align-items: flex-start;
+        flex-direction: column;
+        min-height: 22rem;
+        padding: 1.4rem;
+    }
+
+    .empty-icon {
+        width: 5rem;
+    }
+
+    .metadata-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .depth-legend {
+        grid-template-columns: auto minmax(3rem, 1fr) auto;
+        left: 0.6rem;
+        right: 0.6rem;
+        bottom: 0.6rem;
+    }
+
+    .timeline-row {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .timeline-row input {
+        grid-column: 1 / -1;
+        grid-row: 1;
+    }
+
+    .timeline-row span:last-child {
+        text-align: right;
+    }
+
+    .control-row {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .transport-buttons {
+        justify-content: center;
+    }
+
+    .frame-readout {
+        justify-content: center;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+    }
+}

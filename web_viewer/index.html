@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Boat Capture Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+    <script defer src="viewer-core.js"></script>
+    <script defer src="app.js"></script>
+</head>
+<body>
+    <header class="app-header">
+        <div>
+            <p class="eyebrow">BOAT SIMULATION · PART 2B</p>
+            <h1>Boat Capture Viewer</h1>
+            <p class="header-description">
+                한 번의 레벨 플레이에서 저장한 Color·Depth 프레임을 실제 캡처 시간에 맞춰 재생합니다.
+            </p>
+        </div>
+
+        <div class="folder-picker">
+            <input id="folder-input" class="visually-hidden" type="file" webkitdirectory multiple>
+            <label class="primary-button" for="folder-input">캡처 세션 폴더 선택</label>
+            <p><code>boat_sim/Saved/BoatCaptures/&lt;세션 시각&gt;</code></p>
+        </div>
+    </header>
+
+    <main>
+        <section id="empty-state" class="empty-state" aria-labelledby="empty-title">
+            <div class="empty-icon" aria-hidden="true">10 Hz</div>
+            <div>
+                <h2 id="empty-title">재생할 캡처 세션을 선택하세요</h2>
+                <p>Manifest 1.1이 들어 있는 타임스탬프 폴더 하나를 선택합니다.</p>
+                <p>별도 서버나 설치 없이 최신 Chrome 또는 Edge에서 바로 사용할 수 있습니다.</p>
+            </div>
+        </section>
+
+        <div id="status-message" class="status-message" role="status" aria-live="polite" hidden></div>
+
+        <section id="viewer" class="viewer" aria-label="캡처 이미지 재생기" hidden>
+            <div class="session-summary">
+                <div>
+                    <p class="eyebrow">CAPTURE SESSION</p>
+                    <h2 id="session-name">-</h2>
+                </div>
+                <dl class="metadata-grid">
+                    <div><dt>Manifest</dt><dd id="meta-version">-</dd></div>
+                    <div><dt>해상도</dt><dd id="meta-resolution">-</dd></div>
+                    <div><dt>프레임</dt><dd id="meta-frame-count">-</dd></div>
+                    <div><dt>저장 간격</dt><dd id="meta-interval">-</dd></div>
+                    <div><dt>전체 시간</dt><dd id="meta-duration">-</dd></div>
+                    <div><dt>GPU Readback</dt><dd id="meta-readback">-</dd></div>
+                    <div><dt>캡처 누락</dt><dd id="meta-dropped">-</dd></div>
+                    <div><dt>저장 실패</dt><dd id="meta-failed">-</dd></div>
+                </dl>
+            </div>
+
+            <aside id="warning-panel" class="warning-panel" aria-labelledby="warning-title" hidden>
+                <h3 id="warning-title">캡처 세션 확인 사항</h3>
+                <ul id="warning-list"></ul>
+            </aside>
+
+            <div class="capture-grid">
+                <article class="capture-panel">
+                    <header class="panel-header">
+                        <div>
+                            <p class="eyebrow">SCENE COLOR</p>
+                            <h3>Color</h3>
+                        </div>
+                        <span class="panel-badge">Tone Mapped RGB</span>
+                    </header>
+                    <div class="image-stage">
+                        <img id="color-image" alt="선박 캡처 컬러 프레임">
+                    </div>
+                    <p id="color-description" class="panel-description">-</p>
+                </article>
+
+                <article class="capture-panel">
+                    <header class="panel-header">
+                        <div>
+                            <p class="eyebrow">SCENE DEPTH</p>
+                            <h3>Depth Map</h3>
+                        </div>
+                        <span class="panel-badge depth-badge">RGB 0–255</span>
+                    </header>
+                    <div class="image-stage depth-stage">
+                        <img id="depth-image" alt="가까운 곳이 밝고 먼 곳이 어두운 Depth 프레임">
+                        <div class="depth-legend" aria-label="Depth 명암 범례">
+                            <span>Near <strong>255</strong></span>
+                            <span class="depth-gradient" aria-hidden="true"></span>
+                            <span>Far <strong>0</strong></span>
+                        </div>
+                    </div>
+                    <p id="depth-description" class="panel-description">-</p>
+                </article>
+            </div>
+
+            <section class="playback-controls" aria-label="재생 컨트롤">
+                <div class="timeline-row">
+                    <span id="current-time">00:00.000</span>
+                    <label class="visually-hidden" for="timeline">프레임 탐색</label>
+                    <input id="timeline" type="range" min="0" max="0" step="1" value="0" disabled>
+                    <span id="total-time">00:00.000</span>
+                </div>
+
+                <div class="control-row">
+                    <div class="transport-buttons">
+                        <button id="first-button" type="button" title="첫 프레임 (Home)" aria-label="첫 프레임" disabled>❮❮</button>
+                        <button id="previous-button" type="button" title="이전 프레임 (왼쪽 화살표)" aria-label="이전 프레임" disabled>❮</button>
+                        <button id="play-button" class="play-button" type="button" title="재생 또는 일시 정지 (Space)" aria-label="재생" disabled>▶</button>
+                        <button id="next-button" type="button" title="다음 프레임 (오른쪽 화살표)" aria-label="다음 프레임" disabled>❯</button>
+                        <button id="last-button" type="button" title="마지막 프레임 (End)" aria-label="마지막 프레임" disabled>❯❯</button>
+                    </div>
+
+                    <div class="frame-readout" aria-live="polite">
+                        <span><strong id="frame-position">0 / 0</strong> frame</span>
+                        <span>Manifest index <strong id="frame-index">-</strong></span>
+                        <span>timestamp <strong id="frame-timestamp">-</strong></span>
+                    </div>
+                </div>
+            </section>
+        </section>
+    </main>
+
+    <footer>
+        <p>Depth는 저장된 RGB 0–255 명암값을 변경하지 않고 표시합니다.</p>
+    </footer>
+</body>
+</html>
