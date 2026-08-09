@@ -22,6 +22,11 @@
     box-sizing: border-box;
 }
 
+/* HTML hidden 상태가 아래의 grid·flex 표시 규칙보다 항상 우선하도록 고정합니다. */
+[hidden] {
+    display: none !important;
+}
+
 body {
     min-width: 320px;
     min-height: 100vh;
